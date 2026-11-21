@@ -2,7 +2,7 @@
 //! Programs re-read it at most once a second and repaint at once on the broadcast `set_style` sends (`msg()`).
 use std::{
     path::PathBuf,
-    sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed},
+    sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed},
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{HWND_BROADCAST, PostMessageW, RegisterWindowMessageW};
 
@@ -14,9 +14,10 @@ pub enum Style {
     Tiling,   // a thin status strip at the top, windows side by side
     Road,     // "White road": light ivory, faint triangles in the background
     Ruby,     // deep ruby, a smooth glossy gradient
+    Modern,   // cool slate and mint, following the Windows app light/dark preference
 }
 
-pub const ALL: [Style; 6] = [Style::Normal, Style::Terminal, Style::Dock, Style::Tiling, Style::Road, Style::Ruby];
+pub const ALL: [Style; 7] = [Style::Normal, Style::Terminal, Style::Dock, Style::Tiling, Style::Road, Style::Ruby, Style::Modern];
 
 impl Style {
     pub fn name(self) -> &'static str {
@@ -27,6 +28,7 @@ impl Style {
             Style::Tiling => "tiling",
             Style::Road => "road",
             Style::Ruby => "ruby",
+            Style::Modern => "modern",
         }
     }
     /// Unknown or empty text (no file yet, a hand edit) is the normal style.
@@ -43,12 +45,32 @@ impl Style {
     }
     /// Dark text on a light background.
     pub fn light(self) -> bool {
-        self == Style::Road
+        self == Style::Road || (self == Style::Modern && LIGHT_APPS.load(Relaxed))
     }
 }
 
 static CUR: AtomicU8 = AtomicU8::new(u8::MAX); // index into ALL; MAX = not read yet
 static READ_AT: AtomicU64 = AtomicU64::new(0); // when the file was last read, ms since the epoch
+static LIGHT_APPS: AtomicBool = AtomicBool::new(true);
+
+fn windows_prefers_light_apps() -> bool {
+    use std::ptr::null_mut;
+    use windows_sys::{Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW}, w};
+    let mut value = 1u32;
+    let mut bytes = size_of::<u32>() as u32;
+    let result = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            w!("AppsUseLightTheme"),
+            RRF_RT_REG_DWORD,
+            null_mut(),
+            (&mut value as *mut u32).cast(),
+            &mut bytes,
+        )
+    };
+    result != 0 || value != 0
+}
 
 fn file() -> Option<PathBuf> {
     std::env::var_os("ProgramData").map(|p| PathBuf::from(p).join("WinRust").join("style.txt"))
@@ -59,6 +81,9 @@ fn now_ms() -> u64 {
 }
 
 fn store(s: Style) {
+    if s == Style::Modern {
+        LIGHT_APPS.store(windows_prefers_light_apps(), Relaxed);
+    }
     CUR.store(ALL.iter().position(|&v| v == s).unwrap_or(0) as u8, Relaxed);
     READ_AT.store(now_ms(), Relaxed);
 }
@@ -231,7 +256,7 @@ pub const fn rgb(r: u8, g: u8, b: u8) -> u32 {
 }
 
 /// In the order of `ALL`. Neutral, low-contrast surfaces and one restrained accent (the look of macOS / modern fintech apps).
-pub const PALS: [Pal; 6] = [
+pub const PALS: [Pal; ALL.len()] = [
     // normal: graphite with the Apple system blue
     Pal { bg: rgb(22, 22, 24), line: rgb(46, 46, 50), hover: rgb(36, 36, 40), active: rgb(44, 44, 49), accent: rgb(10, 132, 255), text: rgb(245, 245, 247), dim: rgb(142, 142, 147) },
     // terminal: green on black
@@ -244,7 +269,18 @@ pub const PALS: [Pal; 6] = [
     Pal { bg: rgb(247, 245, 240), line: rgb(226, 220, 207), hover: rgb(238, 233, 222), active: rgb(232, 225, 210), accent: rgb(176, 134, 52), text: rgb(28, 26, 22), dim: rgb(124, 117, 104) },
     // ruby: deep garnet surfaces, a bright ruby accent, warm rose-white text
     Pal { bg: rgb(26, 7, 13), line: rgb(72, 22, 36), hover: rgb(46, 13, 24), active: rgb(60, 17, 31), accent: rgb(232, 52, 84), text: rgb(252, 238, 241), dim: rgb(178, 126, 139) },
+    Pal { bg: rgb(25, 31, 37), line: rgb(59, 75, 86), hover: rgb(46, 56, 64), active: rgb(44, 71, 73), accent: rgb(113, 224, 198), text: rgb(242, 247, 249), dim: rgb(172, 190, 201) },
 ];
+
+const MODERN_LIGHT: Pal = Pal {
+    bg: rgb(231, 238, 242),
+    line: rgb(188, 204, 211),
+    hover: rgb(215, 229, 234),
+    active: rgb(194, 225, 219),
+    accent: rgb(0, 105, 89),
+    text: rgb(21, 36, 45),
+    dim: rgb(72, 94, 105),
+};
 
 /// Status colours shared by every style (Apple's dark-mode system green, yellow, red).
 pub const GOOD: u32 = rgb(48, 209, 88);
@@ -252,7 +288,12 @@ pub const WARN: u32 = rgb(255, 214, 10);
 pub const BAD: u32 = rgb(255, 69, 58);
 
 pub fn pal() -> &'static Pal {
-    &PALS[ALL.iter().position(|&s| s == style()).unwrap_or(0)]
+    let current = style();
+    if current == Style::Modern && current.light() {
+        &MODERN_LIGHT
+    } else {
+        &PALS[ALL.iter().position(|&s| s == current).unwrap_or(0)]
+    }
 }
 
 /// A raised surface (a card, a tile): pure white on the light style, a step up from the background on the dark ones.
@@ -278,8 +319,9 @@ pub fn mix(a: u32, b: u32, t: f32) -> u32 {
 /// Does nothing in the other styles. Needs GDI+ started (GdiplusStartup) by the program.
 pub unsafe fn backdrop(dc: windows_sys::Win32::Graphics::Gdi::HDC, r: windows_sys::Win32::Foundation::RECT, scale: f32) {
     use windows_sys::Win32::Graphics::GdiPlus::*;
-    let ruby = style() == Style::Ruby;
-    if !style().light() && !ruby {
+    let current = style();
+    let ruby = current == Style::Ruby;
+    if current != Style::Road && !ruby {
         return;
     }
     let mut g: *mut GpGraphics = std::ptr::null_mut();

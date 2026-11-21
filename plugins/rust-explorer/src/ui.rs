@@ -8,6 +8,7 @@ use windows_sys::Win32::{Graphics::{Dwm::DwmSetWindowAttribute, Gdi::*}, System:
 
 // The colours come from the WinRust style the topbar gear picks (normal, terminal, dock, tiling): the same palette as the bar.
 pub use winrust_common::style::{pal, ui_face};
+use winrust_common::style::{Style, card, style};
 // sunk surfaces: darker than the window on the dark styles, white on the light one
 pub fn listbg() -> u32 { if winrust_common::style::style().light() { winrust_common::style::card() } else { mix(pal().bg, 0, 0.22) } }
 pub fn pill() -> u32 { if winrust_common::style::style().light() { mix(pal().bg, pal().text, 0.06) } else { mix(pal().bg, 0, 0.35) } }
@@ -151,6 +152,10 @@ pub unsafe fn restyle(h: HWND) {
         1
     }
     EnumChildWindows(h, Some(each), 0);
+    let chrome = ST.with(|c| c.try_borrow().map_or(ptr::null_mut(), |s| s.tab));
+    if !chrome.is_null() {
+        place_edit(chrome);
+    }
     // the list rows' cached fonts and the title bar follow too
     let (a, b) = FONTS.replace((0, 0));
     for f in [a, b].into_iter().filter(|&f| f != 0) {
@@ -166,9 +171,10 @@ pub unsafe fn restyle(h: HWND) {
 /// Dark list: themed scrollbars and header, own colours and font, taller rows.
 pub fn style_list(list: HWND) {
     unsafe {
-        SetWindowTheme(list, w("DarkMode_Explorer").as_ptr(), ptr::null());
+        let light = style() == Style::Modern && style().light();
+        SetWindowTheme(list, w(if light { "Explorer" } else { "DarkMode_Explorer" }).as_ptr(), ptr::null());
         let hdr = SendMessageW(list, LVM_GETHEADER, 0, 0) as HWND;
-        SetWindowTheme(hdr, w("DarkMode_ItemsView").as_ptr(), ptr::null());
+        SetWindowTheme(hdr, w(if light { "ItemsView" } else { "DarkMode_ItemsView" }).as_ptr(), ptr::null());
         for (m, c) in [(LVM_SETBKCOLOR, listbg()), (LVM_SETTEXTBKCOLOR, listbg()), (LVM_SETTEXTCOLOR, pal().text)] { SendMessageW(list, m, 0, c as isize); }
         SendMessageW(list, WM_SETFONT, font(14, 400, ui_face()) as usize, 1);
         row_height(list, true);
@@ -387,7 +393,8 @@ fn layout(cw: i32, n: usize) -> Layout {
     let (by0, by1, bs) = (sc(44), sc(80), sc(36));
     let btn = |i: i32| rc(sc(12) + i * (bs + sc(4)), by0, sc(12) + i * (bs + sc(4)) + bs, by1);
     let view = rc(cw - sc(12) - bs, by0, cw - sc(12), by1);
-    let search = rc(view.left - sc(4) - bs, by0, view.left - sc(4), by1);
+    let search_w = if style() == Style::Modern && cw >= sc(720) { sc(176) } else { bs };
+    let search = rc(view.left - sc(4) - search_w, by0, view.left - sc(4), by1);
     let reload = btn(3);
     let pill = rc(reload.right + sc(8), by0, search.left - sc(8), by1);
     Layout { tabs, close, plus, back: btn(0), fwd: btn(1), up: btn(2), reload, pill, search, view }
@@ -496,6 +503,8 @@ unsafe fn paint_chrome(hwnd: HWND) {
     winrust_common::style::backdrop(dc, cr, sc(100) as f32 / 100.0);
     SetBkMode(dc, TRANSPARENT as i32);
     let l = layout(cr.right, labels.len());
+    let modern = style() == Style::Modern;
+    let toolbar = if modern { card() } else { pal().bg };
     let hot = HOT.get();
     let (f_txt, f_glyph, f_small) = (font(13, 400, ui_face()) as HFONT, font(16, 400, winrust_common::style::icon_face()) as HFONT, font(12, 400, winrust_common::style::icon_face()) as HFONT);
     let of = SelectObject(dc, f_txt);
@@ -506,9 +515,14 @@ unsafe fn paint_chrome(hwnd: HWND) {
         let (th, ta) = (hv(TAB + i as i32, hot == TAB + i as i32 || hot == CLOSE + i as i32), hv(1000 + i as i32, on));
         let p = press_t(TAB + i as i32);
         fill(dc, *t, mix(mix(mix(pal().bg, pal().hover, th), pal().active, ta), pal().accent, 0.35 * p), sc(8));
-        if ta > 0.01 { fill(dc, rc(t.left + (t.right - t.left) / 2 - sc(12), t.bottom - sc(3), t.left + (t.right - t.left) / 2 + sc(12), t.bottom), mix(pal().active, pal().accent, ta), sc(3)); }
+        if modern {
+            SelectObject(dc, f_small);
+            text(dc, "\u{E838}", rc(t.left + sc(8), t.top, t.left + sc(28), t.bottom), mix(pal().dim, pal().accent, ta), DT_CENTER);
+        } else if ta > 0.01 {
+            fill(dc, rc(t.left + (t.right - t.left) / 2 - sc(12), t.bottom - sc(3), t.left + (t.right - t.left) / 2 + sc(12), t.bottom), mix(pal().active, pal().accent, ta), sc(3));
+        }
         SelectObject(dc, f_txt);
-        text(dc, &labels[i], rc(t.left + sc(14), t.top, t.right - sc(if labels.len() > 1 { 30 } else { 10 }), t.bottom), mix(pal().dim, pal().text, ta.max(th)), DT_LEFT);
+        text(dc, &labels[i], rc(t.left + sc(if modern { 32 } else { 14 }), t.top, t.right - sc(if labels.len() > 1 { 30 } else { 10 }), t.bottom), mix(pal().dim, pal().text, ta.max(th)), DT_LEFT);
         if labels.len() > 1 && (on || th > 0.05) {
             let c = l.close[i];
             glow(dc, CLOSE + i as i32, c, mix(pal().bg, pal().active, ta), pal().hover, sc(6), hot == CLOSE + i as i32);
@@ -521,17 +535,34 @@ unsafe fn paint_chrome(hwnd: HWND) {
     text(dc, "\u{E710}", l.plus, pal().dim, DT_CENTER);
 
     // toolbar buttons
+    if modern {
+        fill(dc, rc(0, l.back.top - sc(4), cr.right, cr.bottom), toolbar, 0);
+        fill(dc, rc(0, l.back.top - sc(4), cr.right, l.back.top - sc(4) + 1), pal().line, 0);
+    }
     SelectObject(dc, f_glyph);
-    for (k, r, g, enabled) in [(BACK, l.back, "\u{E72B}", can_back), (FWD, l.fwd, "\u{E72A}", can_fwd), (UP, l.up, "\u{E74A}", true), (RELOAD, l.reload, "\u{E72C}", true), (SEARCH, l.search, "\u{E721}", true), (VIEW, l.view, if thumbs { "\u{E8FD}" } else { "\u{E80A}" }, true)] {
-        if enabled { glow(dc, k, r, pal().bg, pal().hover, sc(8), hot == k); }
+    for (k, r, g, enabled) in [(BACK, l.back, "\u{E72B}", can_back), (FWD, l.fwd, "\u{E72A}", can_fwd), (UP, l.up, "\u{E74A}", true), (RELOAD, l.reload, "\u{E72C}", true), (VIEW, l.view, if thumbs { "\u{E8FD}" } else { "\u{E80A}" }, true)] {
+        if enabled { glow(dc, k, r, toolbar, pal().hover, sc(8), hot == k); }
         text(dc, g, r, if enabled { pal().text } else { off() }, DT_CENTER);
+    }
+    if l.search.right - l.search.left > sc(40) {
+        fill(dc, l.search, pal().line, sc(10));
+        let search = rc(l.search.left + 1, l.search.top + 1, l.search.right - 1, l.search.bottom - 1);
+        fill(dc, search, pill(), sc(9));
+        glow(dc, SEARCH, search, pill(), pal().hover, sc(9), hot == SEARCH);
+        text(dc, "\u{E721}", rc(search.left, search.top, search.left + sc(36), search.bottom), pal().accent, DT_CENTER);
+        SelectObject(dc, f_txt);
+        text(dc, winrust_common::t!("Поиск в этой папке", "Search this folder"), rc(search.left + sc(36), search.top, search.right - sc(8), search.bottom), pal().dim, DT_LEFT);
+    } else {
+        glow(dc, SEARCH, l.search, toolbar, pal().hover, sc(8), hot == SEARCH);
+        text(dc, "\u{E721}", l.search, pal().text, DT_CENTER);
     }
 
     // address pill: accent outline while it is being edited
     let focused = !edit.is_null() && GetFocus() == edit;
     let f = hv(2000, focused);
-    fill(dc, l.pill, mix(pal().line, pal().accent, f), sc(18));
-    fill(dc, rc(l.pill.left + 1, l.pill.top + 1, l.pill.right - 1, l.pill.bottom - 1), pill(), sc(17));
+    let radius = sc(if modern { 10 } else { 18 });
+    fill(dc, l.pill, mix(pal().line, pal().accent, f), radius);
+    fill(dc, rc(l.pill.left + 1, l.pill.top + 1, l.pill.right - 1, l.pill.bottom - 1), pill(), radius - 1);
     SelectObject(dc, f_glyph);
     let searching = SEARCHING.with_borrow(|s| s.clone());
     text(dc, if searching.is_some() { "\u{E721}" } else { "\u{E838}" }, rc(l.pill.left + sc(10), l.pill.top, l.pill.left + sc(38), l.pill.bottom), mix(pal().dim, pal().accent, f), DT_CENTER);

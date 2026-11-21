@@ -1416,6 +1416,11 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
                 desk::layout_icons(h);
                 0
             }
+            WM_SETTINGCHANGE if !desk() && winrust_common::style::style() == winrust_common::style::Style::Modern => {
+                winrust_common::style::reload();
+                ui::restyle(h);
+                0
+            }
             // mouse buttons 4 / 5 (and keyboard media keys) arrive as APPCOMMAND_BROWSER_BACKWARD / _FORWARD
             0x0319 if !desk() && matches!((lp >> 16) & 0x7FF, 1 | 2) => { nav(h, (lp >> 16) & 0x7FF == 1); 1 }
             WM_SIZE => {

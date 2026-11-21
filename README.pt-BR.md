@@ -59,6 +59,7 @@ A engrenagem da barra abre o menu de estilos. A escolha se aplica ao Explorador 
 | **Janelas lado a lado** | Barra fina no topo com destaque âmbar e opção de organizar janelas abertas. |
 | **Estrada branca** | Fundo marfim com triângulos discretos e traços dourados. |
 | **Rubi** | Fundo grená com destaque rubi e brilho suave. |
+| **Moderno** | Barra com Iniciar antes da busca, ícones sobre bases de contraste e Alt+Tab com lista de janelas e prévia ao vivo. O Explorador e as Configurações do WinRust seguem a paleta, que acompanha a preferência de tema claro ou escuro dos aplicativos no Windows. |
 
 A engrenagem também controla o ocultamento automático e o posicionamento lateral. O estilo é salvo em `%ProgramData%\WinRust\style.txt`.
 

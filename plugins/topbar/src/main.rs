@@ -22,6 +22,7 @@ use winrust_common::style::{Style, card, on_accent, pal, rgb, style, ui_face};
 mod clip;
 mod fly;
 mod quick;
+mod switcher;
 use windows::{
     Win32::{
         Media::Audio::{Endpoints::IAudioEndpointVolume, IMMDeviceEnumerator, MMDeviceEnumerator, eConsole, eRender},
@@ -240,7 +241,7 @@ fn sc(v: i32) -> i32 {
     (v as f32 * SCALE.get()) as i32
 }
 fn bar_h() -> i32 {
-    if vert() { sc(60) } else { sc(BAR_H) }
+    if vert() { sc(60) } else { sc(if style() == Style::Modern { 48 } else { BAR_H }) }
 }
 /// Screen y of the bar's top edge when it is in place (bottom of the primary monitor, or its top in the tiling style).
 unsafe fn bar_top() -> i32 {
@@ -404,7 +405,9 @@ const FCELL: i32 = 38;
 fn fly_size() -> (usize, i32, i32) {
     let n = over_idx().len().max(1);
     let cols = n.min(6);
-    (cols, sc(FCELL) * cols as i32 + sc(16), sc(FCELL) * n.div_ceil(cols) as i32 + sc(16) + sc(26))
+    let width = sc(FCELL) * cols as i32 + sc(16);
+    let min_width = if style() == Style::Modern { sc(228) } else { 0 };
+    (cols, width.max(min_width), sc(FCELL) * n.div_ceil(cols) as i32 + sc(16) + sc(26))
 }
 
 unsafe fn fly_toggle() {
@@ -443,10 +446,11 @@ unsafe fn tf_progress(n: i32) -> f32 {
 
 unsafe extern "system" fn fly_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     let cell_at = |lp: LPARAM| -> i32 {
-        let (x, y) = ((lp & 0xffff) as i16 as i32 - sc(8), ((lp >> 16) & 0xffff) as i16 as i32 - sc(8));
-        let (cols, _, _) = fly_size();
+        let (cols, width, _) = fly_size();
+        let span = sc(FCELL) * cols as i32;
+        let (x, y) = (lp as i16 as i32 - (width - span) / 2, (lp >> 16) as i16 as i32 - sc(8));
         let n = over_idx().len() as i32;
-        if x < 0 || y < 0 || x >= sc(FCELL) * cols as i32 {
+        if x < 0 || y < 0 || x >= span {
             return -1;
         }
         let i = (y / sc(FCELL)) * cols as i32 + x / sc(FCELL);
@@ -460,7 +464,8 @@ unsafe extern "system" fn fly_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             GetClientRect(hwnd, &mut r);
             fill(dc, r, pal().line, sc(12));
             fill(dc, RECT { left: 1, top: 1, right: r.right - 1, bottom: r.bottom - 1 }, pal().bg, sc(12));
-            let (cols, _, _) = fly_size();
+            let (cols, width, _) = fly_size();
+            let left = (width - sc(FCELL) * cols as i32) / 2;
             let f = tip_font();
             let of = SelectObject(dc, f);
             SetBkMode(dc, TRANSPARENT as i32);
@@ -469,19 +474,25 @@ unsafe extern "system" fn fly_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             let over = over_idx();
             TAPPS.with_borrow(|t| {
                 for (n, ti) in over.iter().map(|&i| &t[i]).enumerate() {
-                    let (x, y) = (sc(8) + (n % cols) as i32 * sc(FCELL), sc(8) + (n / cols) as i32 * sc(FCELL));
+                    let (x, y) = (left + (n % cols) as i32 * sc(FCELL), sc(8) + (n / cols) as i32 * sc(FCELL));
                     if FHOT.get() == n as i32 {
                         fill(dc, RECT { left: x, top: y, right: x + sc(FCELL), bottom: y + sc(FCELL) }, pal().hover, sc(6));
                         tip = ti.tip.clone();
                     }
                     if !ti.icon.is_null() {
                         let sz = (sc(20) as f32 * (0.4 + 0.6 * tf_progress(n as i32))) as i32; // pops in
-                        DrawIconEx(dc, x + sc(19) - sz / 2, y + sc(18) - sz / 2, ti.icon, sz, sz, 0, null_mut(), DI_NORMAL);
+                        app_icon(dc, ti.icon, x + sc(19), y + sc(18), sz);
                     }
                 }
             });
             if tip.is_empty() {
-                tip = if over.is_empty() { winrust_common::pt!("No more icons").into() } else { winrust_common::pt!("Middle click: move to the bar").into() };
+                tip = if over.is_empty() {
+                    winrust_common::pt!("No more icons").into()
+                } else if style() == Style::Modern {
+                    t!("Средняя кнопка закрепляет значок", "Middle click to pin an icon").into()
+                } else {
+                    winrust_common::pt!("Middle click: move to the bar").into()
+                };
             }
             let mut tr = RECT { left: sc(10), top: r.bottom - sc(26), right: r.right - sc(10), bottom: r.bottom - sc(4) };
             DrawTextW(dc, wide(&tip).as_ptr(), -1, &mut tr, DT_LEFT | DT_NOPREFIX | DT_SINGLELINE | DT_END_ELLIPSIS | DT_VCENTER);
@@ -662,19 +673,29 @@ unsafe fn alt_tab(back: bool) {
             return SWITCHING.store(false, Relaxed);
         }
         SW.set((v, if n == 1 { 0 } else if back { n - 1 } else { 1 }));
-        let scr = GetSystemMetrics(SM_CXSCREEN);
-        let w = (n as i32 * sc(SW_CELL)).min(scr - sc(80)) + 2 * sc(SW_PAD);
-        let h = sc(SW_PAD) + sc(SW_CELL) + sc(SW_TITLE) + sc(SW_PAD) / 2;
+        let (x, y, w, h) = if style() == Style::Modern {
+            let r = switcher::panel(GetForegroundWindow(), n);
+            (r.left, r.top, r.right - r.left, r.bottom - r.top)
+        } else {
+            let scr = GetSystemMetrics(SM_CXSCREEN);
+            let w = (n as i32 * sc(SW_CELL)).min(scr - sc(80)) + 2 * sc(SW_PAD);
+            let h = sc(SW_PAD) + sc(SW_CELL) + sc(SW_TITLE) + sc(SW_PAD) / 2;
+            ((scr - w) / 2, (GetSystemMetrics(SM_CYSCREEN) - h) / 2, w, h)
+        };
         SetWindowRgn(sw, CreateRoundRectRgn(0, 0, w + 1, h + 1, rr(18), rr(18)), 1);
-        SetWindowPos(sw, HWND_TOPMOST, (scr - w) / 2, (GetSystemMetrics(SM_CYSCREEN) - h) / 2, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetWindowPos(sw, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     } else {
         SW.with_borrow_mut(|(v, i)| *i = if back { (*i + v.len() - 1) % v.len() } else { (*i + 1) % v.len() });
+    }
+    if style() == Style::Modern {
+        SW.with_borrow(|(windows, i)| switcher::preview(sw, windows[*i]));
     }
     InvalidateRect(sw, null(), 0);
 }
 
 /// Alt released: switch to the selected window (restored if minimized). Esc: just close.
 unsafe fn alt_done(cancel: bool) {
+    switcher::clear_preview();
     ShowWindow(SWWND.get(), SW_HIDE);
     let (v, i) = SW.take();
     if let Some(&w) = v.get(i).filter(|_| !cancel) {
@@ -686,6 +707,18 @@ unsafe fn alt_done(cancel: bool) {
 }
 
 unsafe extern "system" fn sw_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if msg == WM_LBUTTONUP && style() == Style::Modern {
+        let mut r = RECT::default();
+        GetClientRect(hwnd, &mut r);
+        let activated = SW.with_borrow_mut(|(windows, selected)| {
+            match switcher::row_at(r, lp as i16 as i32, (lp >> 16) as i16 as i32, windows.len(), *selected) {
+                Some(i) => { *selected = i; true }
+                None => false,
+            }
+        });
+        if activated { alt_done(false); }
+        return 0;
+    }
     if msg != WM_PAINT {
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
@@ -699,6 +732,10 @@ unsafe extern "system" fn sw_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     fill(mem, RECT { left: 1, top: 1, right: r.right - 1, bottom: r.bottom - 1 }, pal().bg, sc(18));
     let pad = sc(SW_PAD);
     SW.with_borrow(|(v, sel)| {
+        if style() == Style::Modern {
+            switcher::draw(mem, r, v, *sel);
+            return;
+        }
         let cell = (r.right - 2 * pad) / v.len().max(1) as i32;
         let isz = sc(36).min(cell - sc(14)).max(sc(12));
         for (k, &w) in v.iter().enumerate() {
@@ -1331,12 +1368,33 @@ fn refresh() {
 // ---------- layout / hit-testing ----------
 
 struct Layout {
-    x0: i32, // first slot: the search button; Start and the rest follow
+    x0: i32,
     bw: i32,
     gap: i32,
+    start_first: bool,
     apps: (i32, i32),
     sys: (i32, i32),
     clock: (i32, i32),
+}
+
+impl Layout {
+    fn position(&self, button: i32) -> i32 {
+        let slot = match button {
+            SEARCH => self.start_first as i32,
+            0 => (!self.start_first) as i32,
+            i => i + 1,
+        };
+        self.x0 + slot * (self.bw + self.gap)
+    }
+
+    fn button_at(&self, slot: i32) -> i32 {
+        match slot {
+            0 if self.start_first => 0,
+            1 if self.start_first => SEARCH,
+            0 => SEARCH,
+            i => i - 1,
+        }
+    }
 }
 
 fn layout(w: i32) -> Layout {
@@ -1352,7 +1410,7 @@ fn layout(w: i32) -> Layout {
     // ...but never so far right that the windows' buttons run into the tray: then the whole row shifts left
     let right_limit = w - margin - (n * (bw + gap) - gap);
     let centered = (w - (fixed * (bw + gap) - gap)) / 2;
-    Layout { x0: if i18n::style::align_left() { 0 } else { centered }.min(right_limit).max(sc(GEAR_X.0 + GEAR_X.1 + 6)), bw, gap, apps, sys, clock } // clear of the gear
+    Layout { x0: if i18n::style::align_left() { 0 } else { centered }.min(right_limit).max(sc(GEAR_X.0 + GEAR_X.1 + 6)), bw, gap, start_first: style() == Style::Modern, apps, sys, clock } // clear of the gear
 }
 
 unsafe fn hit(hwnd: HWND, x: i32, y: i32) -> i32 {
@@ -1375,7 +1433,7 @@ unsafe fn hit(hwnd: HWND, x: i32, y: i32) -> i32 {
     }
     let n = BTNS.with_borrow(|b| b.len()) as i32 + 1;
     let (d, i) = (x - l.x0, (x - l.x0) / (l.bw + l.gap));
-    if d < 0 || d % (l.bw + l.gap) >= l.bw || i >= n { NONE } else if i == 0 { SEARCH } else { i - 1 }
+    if d < 0 || d % (l.bw + l.gap) >= l.bw || i >= n { NONE } else { l.button_at(i) }
 }
 
 // ---------- animation ----------
@@ -1880,10 +1938,90 @@ thread_local! {
 unsafe fn view_sig() -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    pal().bg.hash(&mut h);
     BTNS.with_borrow(|b| b.iter().for_each(|b| (b.pin, b.icon as usize, b.wins.iter().map(|&w| (w as usize, IsIconic(w))).collect::<Vec<_>>()).hash(&mut h)));
     (GetForegroundWindow() as usize, BAT.get(), VOL.get(), WIFI.get(), INET.get(), EXPLORER_UP.load(Relaxed), clock_texts(), lang_name()).hash(&mut h);
     TAPPS.with_borrow(|t| t.iter().for_each(|x| (x.hwnd as usize, x.uid, x.icon as usize, x.hidden, &x.tip).hash(&mut h)));
     h.finish()
+}
+
+/// Classify the visible pixels of small app icons once per handle. The background colour is a key
+/// for transparency, including icons drawn with the older AND/XOR mask.
+unsafe fn icon_ink(icon: HICON) -> i8 {
+    thread_local! {
+        static INK: RefCell<HashMap<isize, i8>> = RefCell::new(HashMap::new());
+    }
+    INK.with_borrow_mut(|cache| {
+        if let Some(&ink) = cache.get(&(icon as isize)) {
+            return ink;
+        }
+        const PX: i32 = 16;
+        const KEY: u32 = 0x0054_BDDF;
+        let dc = CreateCompatibleDC(null_mut());
+        if dc.is_null() { return 0; }
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = PX;
+        info.bmiHeader.biHeight = -PX;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        let mut bits = null_mut();
+        let bmp = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+        if bmp.is_null() {
+            DeleteDC(dc);
+            return 0;
+        }
+        let old = SelectObject(dc, bmp);
+        std::slice::from_raw_parts_mut(bits.cast::<u32>(), (PX * PX) as usize).fill(KEY);
+        DrawIconEx(dc, 0, 0, icon, PX, PX, 0, null_mut(), DI_NORMAL);
+        GdiFlush();
+        let pixels = std::slice::from_raw_parts(bits.cast::<u32>(), (PX * PX) as usize);
+        let (mut seen, mut dark, mut light) = (0, 0, 0);
+        for color in pixels.iter().map(|pixel| pixel & 0x00FF_FFFF).filter(|&color| color != KEY) {
+            let lum = (54 * (color >> 16) + 183 * ((color >> 8) & 255) + 19 * (color & 255)) >> 8;
+            seen += 1;
+            dark += usize::from(lum < 77);
+            light += usize::from(lum > 189);
+        }
+        SelectObject(dc, old);
+        DeleteObject(bmp);
+        DeleteDC(dc);
+        let ink = if seen == 0 { 0 } else if dark * 3 >= seen * 2 { -1 } else if light * 3 >= seen * 2 { 1 } else { 0 };
+        if cache.len() >= 768 { cache.clear(); }
+        cache.insert(icon as isize, ink);
+        ink
+    })
+}
+
+/// Add a field only where a low-contrast icon needs one, so coloured app artwork stays clear.
+unsafe fn app_icon(dc: HDC, icon: HICON, cx: i32, cy: i32, size: i32) {
+    if icon.is_null() || size <= 0 {
+        return;
+    }
+    let current = style();
+    if current == Style::Modern && icon_ink(icon) == if current.light() { 1 } else { -1 } {
+        let pad = size / 2 + sc(3);
+        let base = mix(pal().bg, pal().text, if style().light() { 0.52 } else { 0.43 });
+        fill(dc, RECT { left: cx - pad, top: cy - pad, right: cx + pad, bottom: cy + pad }, base, sc(8));
+    }
+    DrawIconEx(dc, cx - size / 2, cy - size / 2, icon, size, size, 0, null_mut(), DI_NORMAL);
+}
+
+unsafe fn start_mark(dc: HDC, cx: i32, cy: i32, hot: f32, pressed: f32) {
+    if style() == Style::Modern {
+        let s = sc(14);
+        let rect = RECT { left: cx - s, top: cy - s, right: cx + s, bottom: cy + s };
+        fill(dc, rect, mix(pal().accent, pal().text, 0.15 * hot), sc(10));
+        text(dc, "\u{E700}", rect, on_accent(), DT_CENTER);
+        return;
+    }
+    let tile = ((sc(8) as f32) * (1.0 + 0.12 * hot) * (1.0 - 0.2 * pressed)) as i32;
+    let gap = sc(1).max(1);
+    let colors = [mix(pal().accent, pal().text, 0.35), mix(pal().accent, pal().text, 0.15), mix(pal().accent, pal().text, 0.15), pal().accent];
+    for ((dx, dy), color) in [(-1, -1), (0, -1), (-1, 0), (0, 0)].into_iter().zip(colors) {
+        let (x, y) = (cx + if dx < 0 { -tile - gap } else { gap }, cy + if dy < 0 { -tile - gap } else { gap });
+        fill(dc, RECT { left: x, top: y, right: x + tile, bottom: y + tile }, color, sc(3));
+    }
 }
 
 unsafe fn clock_texts() -> (String, String) {
@@ -1914,13 +2052,13 @@ unsafe fn paint_vert(dc: HDC, cr: RECT, fonts: [HFONT; 4]) {
     SelectObject(dc, f_glyph);
     text(dc, "\u{E713}", gr, if hot == GEAR { pal().text } else { dim }, DT_CENTER);
 
-    let sb = cell(l.x0, l.bw);
+    let sb = cell(l.position(SEARCH), l.bw);
     glow(dc, SEARCH, hot == SEARCH, sb, pal().bg, pal().hover, sc(8));
     text(dc, "\u{E721}", sb, if hot == SEARCH { pal().text } else { dim }, DT_CENTER);
 
     BTNS.with_borrow(|btns| {
         for (i, b) in btns.iter().enumerate() {
-            let y = l.x0 + (i as i32 + 1) * (l.bw + l.gap);
+            let y = l.position(i as i32);
             let r = cell(y, l.bw);
             let mid = y + l.bw / 2;
             let act = b.wins.contains(&fg);
@@ -1929,13 +2067,7 @@ unsafe fn paint_vert(dc: HDC, cr: RECT, fonts: [HFONT; 4]) {
                 fill(dc, r, mix(mix(mix(pal().bg, pal().hover, th), active_bg, ta), pal().accent, 0.5 * tp), sc(8));
             }
             if i == 0 {
-                let t = ((sc(8) as f32) * (1.0 + 0.12 * th) * (1.0 - 0.2 * tp)) as i32;
-                let g = sc(1).max(1);
-                let tint = [mix(pal().accent, pal().text, 0.35), mix(pal().accent, pal().text, 0.15), mix(pal().accent, pal().text, 0.15), pal().accent];
-                for (k, (dx, dy)) in [(-1, -1), (0, -1), (-1, 0), (0, 0)].into_iter().enumerate() {
-                    let (px, py) = (cx + if dx < 0 { -t - g } else { g }, mid + if dy < 0 { -t - g } else { g });
-                    fill(dc, RECT { left: px, top: py, right: px + t, bottom: py + t }, tint[k], sc(3));
-                }
+                start_mark(dc, cx, mid, th, tp);
                 continue;
             }
             let ic = match b.pin {
@@ -1944,9 +2076,7 @@ unsafe fn paint_vert(dc: HDC, cr: RECT, fonts: [HFONT; 4]) {
             };
             let key = b.pin.map(|p| -(p as isize) - 1).or_else(|| b.wins.first().map(|&w| w as isize)).unwrap_or(0);
             let isz = (icon_px().min(l.bw - sc(6)) as f32 * (1.0 - 0.18 * tp) * (0.55 + 0.45 * appear(key))) as i32;
-            if !ic.is_null() {
-                DrawIconEx(dc, cx - isz / 2, mid - isz / 2, ic, isz, isz, 0, null_mut(), DI_NORMAL);
-            }
+            app_icon(dc, ic, cx, mid, isz);
             if !b.wins.is_empty() {
                 // the running-app pill stands on the edge facing the screen's border
                 let min = b.wins.iter().all(|&w| IsIconic(w) != 0);
@@ -1970,9 +2100,7 @@ unsafe fn paint_vert(dc: HDC, cr: RECT, fonts: [HFONT; 4]) {
             let (i, ti) = (k + 1, &t[ix]);
             let y = l.apps.0 + i as i32 * sc(24);
             glow(dc, TAPP + i as i32, hot == TAPP + i as i32, cell(y, sc(24)), pal().bg, pal().hover, sc(8));
-            if !ti.icon.is_null() {
-                DrawIconEx(dc, cx - sc(8), y + sc(4), ti.icon, sc(16), sc(16), 0, null_mut(), DI_NORMAL);
-            }
+            app_icon(dc, ti.icon, cx, y + sc(12), sc(16));
         }
     });
 
@@ -2068,8 +2196,8 @@ unsafe fn paint(hwnd: HWND) {
     SelectObject(dc, f_glyph);
     text(dc, "\u{E713}", gr, if hot == GEAR { pal().text } else { mix(pal().dim, pal().text, 0.5) }, DT_CENTER);
 
-    // search button (left of Start)
-    let sb = RECT { left: l.x0, top, right: l.x0 + l.bw, bottom: bot };
+    let search_x = l.position(SEARCH);
+    let sb = cell(search_x, l.bw);
     glow(dc, SEARCH, hot == SEARCH, sb, pal().bg, pal().hover, sc(8));
     SelectObject(dc, f_glyph);
     text(dc, "\u{E721}", sb, if hot == SEARCH { pal().text } else { mix(pal().dim, pal().text, 0.5) }, DT_CENTER);
@@ -2077,7 +2205,7 @@ unsafe fn paint(hwnd: HWND) {
     // Start, pinned apps, open windows (center)
     BTNS.with_borrow(|btns| {
         for (i, b) in btns.iter().enumerate() {
-            let x = l.x0 + (i as i32 + 1) * (l.bw + l.gap);
+            let x = l.position(i as i32);
             let r = RECT { left: x, top, right: x + l.bw, bottom: bot };
             let act = b.wins.contains(&fg);
             let (th, ta, tp) = (hv(i as i32, hot == i as i32), hv(2000 + i as i32, act), press_t(i as i32));
@@ -2085,14 +2213,7 @@ unsafe fn paint(hwnd: HWND) {
                 fill(dc, r, mix(mix(mix(pal().bg, pal().hover, th), active_bg, ta), pal().accent, 0.5 * tp), sc(8));
             }
             if i == 0 {
-                // Windows logo in four tiles, lit from the top left; grows a little on hover, squeezes on click
-                let t = ((sc(8) as f32) * (1.0 + 0.12 * th) * (1.0 - 0.2 * tp)) as i32;
-                let (g, cx) = (sc(1).max(1), (r.left + r.right) / 2);
-                let tint = [mix(pal().accent, pal().text, 0.35), mix(pal().accent, pal().text, 0.15), mix(pal().accent, pal().text, 0.15), pal().accent];
-                for (k, (dx, dy)) in [(-1, -1), (0, -1), (-1, 0), (0, 0)].into_iter().enumerate() {
-                    let (px, py) = (cx + if dx < 0 { -t - g } else { g }, mid + if dy < 0 { -t - g } else { g });
-                    fill(dc, RECT { left: px, top: py, right: px + t, bottom: py + t }, tint[k], sc(3));
-                }
+                start_mark(dc, (r.left + r.right) / 2, mid, th, tp);
                 continue;
             }
             let ic = match b.pin {
@@ -2102,9 +2223,7 @@ unsafe fn paint(hwnd: HWND) {
             let key = b.pin.map(|p| -(p as isize) - 1).or_else(|| b.wins.first().map(|&w| w as isize)).unwrap_or(0);
             // squeezes on click, grows in when new, lifts a pixel on hover
             let isz = (icon_px().min(l.bw - sc(6)) as f32 * (1.0 - 0.18 * tp) * (0.55 + 0.45 * appear(key))) as i32;
-            if !ic.is_null() {
-                DrawIconEx(dc, x + (l.bw - isz) / 2, mid - isz / 2 - sc(2) - (sc(1) as f32 * th) as i32, ic, isz, isz, 0, null_mut(), DI_NORMAL);
-            }
+            app_icon(dc, ic, x + l.bw / 2, mid - sc(2) - (sc(1) as f32 * th) as i32, isz);
             if !b.wins.is_empty() {
                 let min = b.wins.iter().all(|&w| IsIconic(w) != 0);
                 let pw = sc(6) + (sc(12) as f32 * ta) as i32; // the running-app pill stretches when its window is active
@@ -2136,9 +2255,7 @@ unsafe fn paint(hwnd: HWND) {
             let (i, ti) = (k + 1, &t[ix]);
             let x = l.apps.0 + i as i32 * sc(24);
             glow(dc, TAPP + i as i32, hot == TAPP + i as i32, cell(x, sc(24)), pal().bg, pal().hover, sc(8));
-            if !ti.icon.is_null() {
-                DrawIconEx(dc, x + sc(4), mid - sc(8), ti.icon, sc(16), sc(16), 0, null_mut(), DI_NORMAL);
-            }
+            app_icon(dc, ti.icon, x + sc(12), mid, sc(16));
         }
     });
 
@@ -2476,7 +2593,7 @@ unsafe fn open_launcher() -> bool {
 /// The gear's menu: the UI style (saved for the other WinRust programs) and putting the windows side by side.
 unsafe fn style_menu() {
     let bar = BAR.load(Relaxed) as HWND;
-    let names = [t!("Обычный", "Normal"), t!("Терминал", "Terminal"), t!("Плавающий док", "Floating dock"), t!("Тайлинг", "Tiling"), t!("Белая дорога", "White road"), t!("Рубин", "Ruby")];
+    let names = [t!("Обычный", "Normal"), t!("Терминал", "Terminal"), t!("Плавающий док", "Floating dock"), t!("Тайлинг", "Tiling"), t!("Белая дорога", "White road"), t!("Рубин", "Ruby"), t!("Современный", "Modern")];
     let mut items: Vec<fly::MItem> = i18n::style::ALL.iter().zip(names).map(|(&s, n)| fly::MItem::new(n).on(s == style())).collect();
     items.push(fly::MItem::new(t!("Разложить окна плиткой", "Tile the windows")).sep());
     items.push(fly::MItem::new(t!("Скрывать панель автоматически", "Hide the bar automatically")).on(i18n::style::autohide()));
@@ -2652,7 +2769,7 @@ unsafe fn min_rect(info: *mut ShellHookInfo, bar: HWND) {
     let exe = exe_of(w);
     let i = BTNS.with_borrow(|b| b.iter().position(|b| b.wins.contains(&w)).or_else(|| b.iter().position(|b| !exe.is_empty() && b.wins.first().is_some_and(|&x| exe_of(x) == exe))));
     let x = match i {
-        Some(i) => l.x0 + (i as i32 + 1) * (l.bw + l.gap),
+        Some(i) => l.position(i as i32),
         None => (l.x0 + l.apps.0) / 2, // no button (yet): the middle of the bar
     };
     if vert() {
@@ -2669,14 +2786,14 @@ unsafe fn tip_cx(l: &Layout, h: i32) -> i32 {
     // along the bar: screen x for a bottom bar, screen y for a side bar
     (if vert() { 0 } else { bar_x_w().0 }) + match h {
         GEAR => sc(GEAR_X.0 + GEAR_X.1 / 2),
-        SEARCH => l.x0 + l.bw / 2,
+        SEARCH => l.position(SEARCH) + l.bw / 2,
         CLOCK => (l.clock.0 + l.clock.1) / 2,
         LANG => l.sys.0 + sc(21),
         WIFI_I => l.sys.0 + sc(58),
         VOL_I => l.sys.0 + sc(90),
         BAT_I => l.sys.0 + sc(130),
         t if (TAPP..TAPP + 100).contains(&t) => l.apps.0 + (t - TAPP) * sc(24) + sc(12),
-        i => l.x0 + (i + 1) * (l.bw + l.gap) + l.bw / 2,
+        i => l.position(i) + l.bw / 2,
     }
 }
 
@@ -2928,7 +3045,7 @@ fn main() {
         RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(tip_proc), hInstance: hi, lpszClassName: tipc.as_ptr(), ..zeroed() });
         TIPWND.set(CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, tipc.as_ptr(), null(), WS_POPUP, 0, 0, 1, 1, null_mut(), null_mut(), hi, null()));
         let swc = wide("topbar_alttab");
-        RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(sw_proc), hInstance: hi, lpszClassName: swc.as_ptr(), ..zeroed() });
+        RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(sw_proc), hInstance: hi, hCursor: LoadCursorW(null_mut(), IDC_ARROW), lpszClassName: swc.as_ptr(), ..zeroed() });
         SWWND.set(CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, swc.as_ptr(), null(), WS_POPUP, 0, 0, 1, 1, null_mut(), null_mut(), hi, null()));
         OLD_STATE.set(remember_taskbar_state());
         appbar_new(hwnd);
@@ -2965,6 +3082,18 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn start_and_search_positions_match_hit_testing() {
+        use super::{Layout, SEARCH};
+        for (start_first, buttons) in [(false, [SEARCH, 0, 1]), (true, [0, SEARCH, 1])] {
+            let layout = Layout { x0: 12, bw: 44, gap: 4, start_first, apps: (0, 0), sys: (0, 0), clock: (0, 0) };
+            for (slot, button) in buttons.into_iter().enumerate() {
+                assert_eq!(layout.button_at(slot as i32), button);
+                assert_eq!(layout.position(button), 12 + slot as i32 * 48);
+            }
+        }
+    }
+
     #[test]
     fn network_icon_state() {
         use super::{INET, Link, WIFI, arcs_lit, net};

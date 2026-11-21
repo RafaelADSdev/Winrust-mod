@@ -707,13 +707,29 @@ struct Theme {
     dim: u32,
     off: u32,
     square: bool,
+    modern: bool,
 }
 
 fn theme() -> Theme {
     let p = winrust_common::style::pal();
+    let current = winrust_common::style::style();
+    let modern = current == winrust_common::style::Style::Modern;
     let up = |t: f32| mix(p.bg, p.text, t);
     let card = winrust_common::style::card();
-    Theme { bg: p.bg, side: up(0.03), card, sep: up(0.1), hover: mix(card, p.text, 0.045), sel: up(0.1), accent: p.accent, fg: p.text, dim: p.dim, off: up(0.2), square: winrust_common::style::style().square() }
+    Theme {
+        bg: p.bg,
+        side: up(0.03),
+        card,
+        sep: if modern { p.line } else { up(0.1) },
+        hover: mix(card, p.text, if modern { 0.075 } else { 0.045 }),
+        sel: if modern { p.active } else { up(0.1) },
+        accent: p.accent,
+        fg: p.text,
+        dim: p.dim,
+        off: up(0.2),
+        square: current.square(),
+        modern,
+    }
 }
 
 use winrust_common::style::rgb;
@@ -910,10 +926,21 @@ unsafe fn paint(hwnd: HWND) {
                 let (l, tp) = (inner.right - w, r.top + (r.bottom - r.top - h) / 2);
                 let lit = on == Some(true);
                 let track = if lit { t.accent } else if on.is_none() { mix(t.card, t.off, 0.5) } else { t.off };
-                shape(mem, RECT { left: l, top: tp, right: l + w, bottom: tp + h }, track, rd(h));
-                let k = h - p(4);
-                let kx = if lit { l + w - k - p(2) } else { l + p(2) };
-                shape(mem, RECT { left: kx, top: tp + p(2), right: kx + k, bottom: tp + p(2) + k }, if on.is_none() { mix(t.fg, t.card, 0.5) } else { rgb(255, 255, 255) }, rd(k));
+                let outline = RECT { left: l, top: tp, right: l + w, bottom: tp + h };
+                shape(mem, outline, if t.modern && !lit { t.dim } else { track }, rd(h));
+                if t.modern && !lit {
+                    shape(mem, inset(outline, p(1).max(1)), t.card, rd(h - 2));
+                }
+                let gap = p(if t.modern { 4 } else { 2 });
+                let k = h - 2 * gap;
+                let kx = if lit { l + w - k - gap } else { l + gap };
+                let knob = match (on, t.modern) {
+                    (None, _) => mix(t.fg, t.card, 0.5),
+                    (Some(true), true) => winrust_common::style::on_accent(),
+                    (Some(false), true) => t.dim,
+                    _ => rgb(255, 255, 255),
+                };
+                shape(mem, RECT { left: kx, top: tp + gap, right: kx + k, bottom: tp + gap + k }, knob, rd(k));
             };
             shape(mem, rc, t.bg, 0);
             // sidebar: one surface with the title bar, a hairline to the content
@@ -925,11 +952,14 @@ unsafe fn paint(hwnd: HWND) {
                 let sel = i == a.page;
                 if sel {
                     shape(mem, r, t.sel, rd(8));
+                    if t.modern {
+                        shape(mem, RECT { left: r.left + p(3), right: r.left + p(6), top: r.top + p(9), bottom: r.bottom - p(9) }, t.accent, p(3));
+                    }
                 }
                 let (glyph, tile) = ICONS.get(i).copied().unwrap_or(("", t.dim));
                 let s = p(26);
                 let tr = RECT { left: r.left + p(8), top: (r.top + r.bottom - s) / 2, right: r.left + p(8) + s, bottom: (r.top + r.bottom + s) / 2 };
-                if t.square {
+                if t.square || t.modern {
                     text(mem, icon_s, glyph, tr, if sel { t.accent } else { t.dim }, DT_CENTER);
                 } else {
                     shape(mem, tr, tile, p(14));
@@ -956,23 +986,20 @@ unsafe fn paint(hwnd: HWND) {
                     text(mem, section, s, RECT { left: cl + p(16), top: r.bottom - p(30), right: cr, bottom: r.bottom - p(8) }, t.dim, DT_LEFT);
                     continue;
                 }
-                // grouped card: rounded at the top of a group and at its bottom, hairlines between its rows
-                let (first, last) = (i == 0 || is_head(i - 1), i + 1 == n || is_head(i + 1));
-                // each row paints only its own slot: a rounded half where the group starts or ends, a square half elsewhere
-                let (rad, mid) = (rd(12), (r.top + r.bottom) / 2);
-                shape(mem, RECT { bottom: mid + 1, ..r }, t.card, if first { rad * 2 } else { 0 });
-                shape(mem, RECT { top: mid, ..r }, t.card, if last { rad * 2 } else { 0 });
-                if first {
-                    shape(mem, RECT { top: r.top + rad, bottom: mid + 1, ..r }, t.card, 0); // squares the bottom corners of the top half
-                }
-                if last {
-                    shape(mem, RECT { top: mid, bottom: r.bottom - rad, ..r }, t.card, 0);
-                }
-                if !first {
-                    shape(mem, RECT { left: r.left + p(16), top: r.top, right: r.right - p(16), bottom: r.top + 1 }, t.sep, 0);
-                }
-                if a.hover == Some(i) {
-                    shape(mem, inset(r, p(4)), t.hover, rd(9) * 2);
+                if t.modern {
+                    let card = RECT { top: r.top + p(2), bottom: r.bottom - p(2), ..r };
+                    shape(mem, card, t.sep, rd(12));
+                    shape(mem, inset(card, 1), if a.hover == Some(i) { t.hover } else { t.card }, rd(11));
+                } else {
+                    // A group shares a card with a rounded first and last row.
+                    let (first, last) = (i == 0 || is_head(i - 1), i + 1 == n || is_head(i + 1));
+                    let (rad, mid) = (rd(12), (r.top + r.bottom) / 2);
+                    shape(mem, RECT { bottom: mid + 1, ..r }, t.card, if first { rad * 2 } else { 0 });
+                    shape(mem, RECT { top: mid, ..r }, t.card, if last { rad * 2 } else { 0 });
+                    if first { shape(mem, RECT { top: r.top + rad, bottom: mid + 1, ..r }, t.card, 0); }
+                    if last { shape(mem, RECT { top: mid, bottom: r.bottom - rad, ..r }, t.card, 0); }
+                    if !first { shape(mem, RECT { left: r.left + p(16), top: r.top, right: r.right - p(16), bottom: r.top + 1 }, t.sep, 0); }
+                    if a.hover == Some(i) { shape(mem, inset(r, p(4)), t.hover, rd(9) * 2); }
                 }
                 let inner = RECT { left: r.left + p(16), right: r.right - p(16), ..r };
                 match row {
@@ -1648,6 +1675,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             }
             WM_ERASEBKGND => 1,
             WM_SIZE | WM_SETTINGCHANGE => {
+                if msg == WM_SETTINGCHANGE && theme().modern {
+                    winrust_common::style::reload();
+                    frame(hwnd);
+                }
                 clamp_scroll(hwnd, 0);
                 let (ed, dpi) = APP.with_borrow(|a| (a.edit, a.dpi));
                 if ed != 0 {
