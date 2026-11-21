@@ -19,6 +19,7 @@ use std::{
 extern crate winrust_common;
 use winrust_common as i18n;
 use winrust_common::style::{Style, card, on_accent, pal, rgb, style, ui_face};
+mod bars;
 mod clip;
 mod fly;
 mod keyboard;
@@ -72,41 +73,47 @@ fn dock() -> bool {
 }
 /// Screen x of a side bar's current left edge, slid away by the show/hide animation.
 unsafe fn bar_x() -> i32 {
-    if i18n::style::side() == i18n::style::Side::Left { -bar_off() } else { GetSystemMetrics(SM_CXSCREEN) - bar_h() + bar_off() }
+    let m = bars::screen();
+    if i18n::style::side() == i18n::style::Side::Left { m.left - bar_off() } else { m.right - bar_h() + bar_off() }
 }
 /// Top-left of the bar window now.
 unsafe fn bar_pos() -> (i32, i32) {
-    if vert() { (bar_x(), 0) } else { (bar_x_w().0, bar_y()) }
+    if vert() { (bar_x(), bars::screen().top) } else { (bar_x_w().0, bar_y()) }
 }
 /// Screen x of a popup of width `w` next to a side bar.
 unsafe fn side_x(w: i32) -> i32 {
-    if i18n::style::side() == i18n::style::Side::Left { bar_h() + sc(8) } else { GetSystemMetrics(SM_CXSCREEN) - bar_h() - sc(8) - w }
+    let m = bars::screen();
+    if i18n::style::side() == i18n::style::Side::Left { m.left + bar_h() + sc(8) } else { m.right - bar_h() - sc(8) - w }
 }
 /// Length of the bar's long axis: the screen height for a side bar, the width otherwise.
 unsafe fn axis_len() -> i32 {
-    GetSystemMetrics(if vert() { SM_CYSCREEN } else { SM_CXSCREEN })
+    let m = bars::screen();
+    if vert() { m.bottom - m.top } else { m.right - m.left }
 }
+unsafe fn axis_origin() -> i32 { if vert() { bars::screen().top } else { bar_x_w().0 } }
 /// Gap under the floating dock.
 fn dock_gap() -> i32 {
     if dock() { sc(8) } else { 0 }
 }
 /// Screen x and width of the bar: the whole screen, or the dock in the middle.
 unsafe fn bar_x_w() -> (i32, i32) {
-    let cx = GetSystemMetrics(SM_CXSCREEN);
+    let m = bars::screen();
+    let cx = m.right - m.left;
     if dock() {
         let w = (cx * 3 / 5).max(sc(720)).min(cx);
-        ((cx - w) / 2, w)
+        (m.left + (cx - w) / 2, w)
     } else {
-        (0, cx)
+        (m.left, cx)
     }
 }
 /// Screen y of the bar's current top edge, slid away by the show/hide animation.
 unsafe fn bar_y() -> i32 {
-    if at_top() { -bar_off() } else { bar_top() + bar_off() }
+    if at_top() { bars::screen().top - bar_off() } else { bar_top() + bar_off() }
 }
 /// Screen y of a popup of height `h` next to the bar: above it, or below it when the bar is at the top.
 unsafe fn pop_y(h: i32) -> i32 {
-    if vert() { GetSystemMetrics(SM_CYSCREEN) - sc(8) - h } else if at_top() { bar_h() + sc(8) } else { bar_top() - sc(8) - h }
+    let m = bars::screen();
+    if vert() { m.bottom - sc(8) - h } else if at_top() { m.top + bar_h() + sc(8) } else { bar_top() - sc(8) - h }
 }
 const GOOD: u32 = winrust_common::style::GOOD;
 const BAD: u32 = winrust_common::style::BAD;
@@ -131,8 +138,6 @@ const WIN_START: u32 = WM_APP + 10; // posted by the keyboard hook: Win key pres
 const ALT_TAB: u32 = WM_APP + 11; // posted by the keyboard hook: Alt+Tab (wp 1 = Shift held: backwards)
 const ALT_UP: u32 = WM_APP + 12; // posted by the keyboard hook: Alt released while switching (wp 1 = Esc: cancel)
 static SWITCHING: AtomicBool = AtomicBool::new(false); // Alt+Tab switcher open (the hook thread reads it)
-static FULLSCREEN: AtomicBool = AtomicBool::new(false);
-static DESK_HIDE: AtomicBool = AtomicBool::new(false); // the desktop in front and the pointer away from the bar for 2 s
 static WIN_ALONE: AtomicBool = AtomicBool::new(false);
 static BAR: AtomicIsize = AtomicIsize::new(0); // the bar window, for the hook thread
 const VOLKEY: u32 = WM_APP + 14; // posted by the keyboard hook: a volume key (wp 0 up, 1 down, 2 mute)
@@ -215,13 +220,9 @@ thread_local! {
     static TRAYFLY: Cell<HWND> = const { Cell::new(null_mut()) };
     static TF_ANIM: Cell<(u64, i32, i32)> = const { Cell::new((0, 0, 0)) }; // tray flyout: when it opened, its final x, y
     static FHOT: Cell<i32> = const { Cell::new(-1) };
-    static HOT: Cell<i32> = const { Cell::new(NONE) };
     static ORDER: RefCell<Vec<HWND>> = const { RefCell::new(Vec::new()) }; // unpinned windows in the order their buttons were added
-    static HV: RefCell<HashMap<i32, (f32, u64)>> = RefCell::new(HashMap::new()); // hover fade per element: (0..1, last update ms)
+    static HV: RefCell<HashMap<(usize, i32), (f32, u64)>> = RefCell::new(HashMap::new()); // hover fade per bar and element
     static BUSY: Cell<bool> = const { Cell::new(false) }; // a fade is still running: the painter asks for another frame
-    static BAR_P: Cell<f32> = const { Cell::new(0.0) }; // bar slide: 0 = off screen, 1 = in place
-    static BAR_T: Cell<u64> = const { Cell::new(0) };
-    static DESK_T: Cell<u64> = const { Cell::new(0) }; // last moment the bar had a reason to stay on the desktop
     static SCALE: Cell<f32> = const { Cell::new(1.0) };
     static OLD_STATE: Cell<usize> = const { Cell::new(ABS_ALWAYSONTOP as usize) };
     static BAT: Cell<(i32, bool)> = const { Cell::new((-1, false)) }; // (percent or -1 = no battery, on AC)
@@ -245,9 +246,10 @@ fn sc(v: i32) -> i32 {
 fn bar_h() -> i32 {
     if vert() { sc(60) } else { sc(if style() == Style::Modern { 48 } else { BAR_H }) }
 }
-/// Screen y of the bar's top edge when it is in place (bottom of the primary monitor, or its top in the tiling style).
+/// Screen y of this bar's top edge when it is in place.
 unsafe fn bar_top() -> i32 {
-    if at_top() { 0 } else { GetSystemMetrics(SM_CYSCREEN) - bar_h() - dock_gap() }
+    let m = bars::screen();
+    if at_top() { m.top } else { m.bottom - bar_h() - dock_gap() }
 }
 
 // ---------- taskbar / appbar ----------
@@ -263,8 +265,16 @@ unsafe fn find_other(class: &str) -> HWND {
     }
 }
 
-unsafe fn tray() -> [HWND; 2] {
-    [find_other("Shell_TrayWnd"), find_other("Shell_SecondaryTrayWnd")]
+unsafe fn tray() -> Vec<HWND> {
+    let mut found = vec![find_other("Shell_TrayWnd")];
+    let class = wide("Shell_SecondaryTrayWnd");
+    let mut next = null_mut();
+    loop {
+        next = FindWindowExW(null_mut(), next, class.as_ptr(), null());
+        if next.is_null() { break; }
+        found.push(next);
+    }
+    found
 }
 
 /// Tells every app to re-register its tray icon with whichever Shell_TrayWnd is found first.
@@ -421,11 +431,10 @@ unsafe fn fly_toggle() {
     }
     let (_, fw, fh) = fly_size();
     FHOT.set(-1);
-    let scr = GetSystemMetrics(SM_CXSCREEN);
-    let (bx, bw) = bar_x_w();
-    let cx = bx + layout(if vert() { axis_len() } else { bw }).apps.0 + sc(12); // above the chevron
+    let m = bars::screen();
+    let cx = axis_origin() + layout(if vert() { axis_len() } else { bar_x_w().1 }).apps.0 + sc(12);
     SetWindowRgn(w, CreateRoundRectRgn(0, 0, fw + 1, fh + 1, rr(12), rr(12)), 1);
-    let (x, y) = if vert() { (side_x(fw), (cx - fh / 2).clamp(sc(8), GetSystemMetrics(SM_CYSCREEN) - fh - sc(8))) } else { ((cx - fw / 2).clamp(sc(8), scr - fw - sc(8)), pop_y(fh)) };
+    let (x, y) = if vert() { (side_x(fw), clamp_popup(cx - fh / 2, m.top, m.bottom, fh, sc(8))) } else { (clamp_popup(cx - fw / 2, m.left, m.right, fw, sc(8)), pop_y(fh)) };
     TF_ANIM.set((now_ms(), x, y));
     SetLayeredWindowAttributes(w, 0, 0, LWA_ALPHA); // tf_step fades it in
     SetWindowPos(w, HWND_TOPMOST, x, y + tf_slide(0.0), fw, fh, SWP_SHOWWINDOW);
@@ -652,15 +661,21 @@ unsafe fn show_tip(s: String, cx: i32) {
     let (w, h) = (r.right + sc(16), r.bottom + sc(10));
     TIP.set(s);
     SetWindowRgn(tw, CreateRoundRectRgn(0, 0, w + 1, h + 1, rr(8), rr(8)), 1);
+    let m = bars::screen();
     if vert() {
-        let y = (cx - h / 2).clamp(sc(4), GetSystemMetrics(SM_CYSCREEN) - h - sc(4));
+        let y = clamp_popup(cx - h / 2, m.top, m.bottom, h, sc(4));
         SetWindowPos(tw, HWND_TOPMOST, side_x(w), y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         InvalidateRect(tw, null(), 1);
         return;
     }
-    let x = (cx - w / 2).clamp(sc(4), GetSystemMetrics(SM_CXSCREEN) - w - sc(4));
-    SetWindowPos(tw, HWND_TOPMOST, x, if at_top() { bar_h() - bar_off() + sc(6) } else { bar_top() + bar_off() - h - sc(6) }, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    let x = clamp_popup(cx - w / 2, m.left, m.right, w, sc(4));
+    SetWindowPos(tw, HWND_TOPMOST, x, if at_top() { m.top + bar_h() - bar_off() + sc(6) } else { bar_top() + bar_off() - h - sc(6) }, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(tw, null(), 1);
+}
+
+fn clamp_popup(value: i32, start: i32, end: i32, size: i32, margin: i32) -> i32 {
+    let min = start + margin;
+    value.clamp(min, (end - size - margin).max(min))
 }
 
 // ---------- Alt+Tab switcher: the open windows' icons, most recently used first, the selected one's title below ----------
@@ -839,58 +854,59 @@ unsafe fn show_taskbar(state: usize) {
 unsafe fn hide_taskbar_if_shown() {
     if tray().into_iter().any(|t| !t.is_null() && IsWindowVisible(t) != 0) {
         hide_taskbar();
+        bars::place_all();
     }
 }
 
-/// Reserves the bottom strip of the primary monitor (maximized windows stay above it).
+/// Reserves this bar's edge so maximized windows stop at it.
 unsafe fn place(hwnd: HWND) {
-    let (cx, cy) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-    let mut ab: APPBARDATA = zeroed();
-    ab.cbSize = size_of::<APPBARDATA>() as u32;
-    ab.hWnd = hwnd;
-    // the reserved strip: the bar itself plus the dock's gap under it
-    // the dock reserves nothing: maximized windows take the whole screen and the dock slides away over them
+    let m = bars::screen();
     let strip = if dock() || i18n::style::autohide() { 0 } else { bar_h() };
-    if vert() {
-        let left = i18n::style::side() == i18n::style::Side::Left;
-        ab.uEdge = if left { ABE_LEFT } else { ABE_RIGHT };
-        ab.rc = if left { RECT { left: 0, top: 0, right: strip, bottom: cy } } else { RECT { left: cx - strip, top: 0, right: cx, bottom: cy } };
+    let edge = match i18n::style::side() {
+        i18n::style::Side::Left => ABE_LEFT,
+        i18n::style::Side::Right => ABE_RIGHT,
+        i18n::style::Side::Bottom if at_top() => ABE_TOP,
+        i18n::style::Side::Bottom => ABE_BOTTOM,
+    };
+    if bars::main_bar(hwnd) {
+        let mut ab = APPBARDATA { cbSize: size_of::<APPBARDATA>() as u32, hWnd: hwnd, uEdge: edge, rc: m, ..zeroed() };
+        match edge {
+            ABE_LEFT => ab.rc.right = m.left + strip,
+            ABE_RIGHT => ab.rc.left = m.right - strip,
+            ABE_TOP => ab.rc.bottom = m.top + strip,
+            _ => ab.rc.top = m.bottom - strip,
+        }
         SHAppBarMessage(ABM_QUERYPOS, &mut ab);
-        if left { ab.rc.right = ab.rc.left + strip } else { ab.rc.left = ab.rc.right - strip }
-    } else if at_top() {
-        ab.uEdge = ABE_TOP;
-        ab.rc = RECT { left: 0, top: 0, right: cx, bottom: strip };
-        SHAppBarMessage(ABM_QUERYPOS, &mut ab);
-        ab.rc.bottom = ab.rc.top + strip;
+        match edge {
+            ABE_LEFT => ab.rc.right = ab.rc.left + strip,
+            ABE_RIGHT => ab.rc.left = ab.rc.right - strip,
+            ABE_TOP => ab.rc.bottom = ab.rc.top + strip,
+            _ => ab.rc.top = ab.rc.bottom - strip,
+        }
+        SHAppBarMessage(ABM_SETPOS, &mut ab);
+        if find_other("Shell_TrayWnd").is_null() {
+            let mut work = m;
+            match edge {
+                ABE_LEFT => work.left = ab.rc.right,
+                ABE_RIGHT => work.right = ab.rc.left,
+                ABE_TOP => work.top = ab.rc.bottom,
+                _ => work.bottom = ab.rc.top,
+            }
+            bars::set_primary_area(work);
+        }
     } else {
-        ab.uEdge = ABE_BOTTOM;
-        ab.rc = RECT { left: 0, top: cy - strip, right: cx, bottom: cy };
-        SHAppBarMessage(ABM_QUERYPOS, &mut ab);
-        ab.rc.top = ab.rc.bottom - strip;
+        bars::reserve_secondary(edge, strip);
     }
-    SHAppBarMessage(ABM_SETPOS, &mut ab);
-    // No explorer (rs-shell / rust-explorer): nobody handles appbars, so set the work area ourselves. Without it maximized
-    // windows slide under the bar and, covering the whole monitor, count as "fullscreen" and hide the bar.
-    if find_other("Shell_TrayWnd").is_null() {
-        set_work_area(if vert() { if ab.uEdge == ABE_LEFT { RECT { left: ab.rc.right, top: 0, right: cx, bottom: cy } } else { RECT { left: 0, top: 0, right: ab.rc.left, bottom: cy } } } else if at_top() { RECT { left: 0, top: ab.rc.bottom, right: cx, bottom: cy } } else { RECT { left: 0, top: 0, right: cx, bottom: ab.rc.top } });
-    }
-    let (x, w) = bar_x_w();
+    let (_, width) = bar_x_w();
     // the dock is a pill; the other styles a plain strip
-    SetWindowRgn(hwnd, if dock() { CreateRoundRectRgn(0, 0, w + 1, bar_h() + 1, bar_h(), bar_h()) } else { null_mut() }, 1);
+    SetWindowRgn(hwnd, if dock() { CreateRoundRectRgn(0, 0, width + 1, bar_h() + 1, bar_h(), bar_h()) } else { null_mut() }, 1);
+    let (x, y) = bar_pos();
     if vert() {
-        SetWindowPos(hwnd, HWND_TOPMOST, bar_x(), 0, bar_h(), cy, SWP_NOACTIVATE);
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, bar_h(), m.bottom - m.top, SWP_NOACTIVATE);
     } else {
-        SetWindowPos(hwnd, HWND_TOPMOST, x, bar_y(), w, bar_h(), SWP_NOACTIVATE);
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, bar_h(), SWP_NOACTIVATE);
     }
     InvalidateRect(hwnd, null(), 0);
-}
-
-unsafe fn set_work_area(mut want: RECT) {
-    let mut cur: RECT = zeroed();
-    SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut cur as *mut _ as *mut _, 0);
-    if (cur.left, cur.top, cur.right, cur.bottom) != (want.left, want.top, want.right, want.bottom) {
-        SystemParametersInfoW(SPI_SETWORKAREA, 0, &mut want as *mut _ as *mut _, SPIF_SENDCHANGE);
-    }
 }
 
 // ---------- data: windows, pins, tray apps, volume, wifi, battery ----------
@@ -1346,7 +1362,7 @@ fn refresh() {
         read_volume();
         let up = !find_other("Shell_TrayWnd").is_null();
         if EXPLORER_UP.swap(up, Relaxed) && !up {
-            place(BAR.load(Relaxed) as HWND); // Explorer (started for Settings) is gone and took the reserved strip with it
+            bars::place_all(); // the Explorer instance opened for Settings took the work-area reservation with it
         }
         if TAPPS.with_borrow(|t| t.is_empty()) && n % 8 == 4 {
             announce(); // no icons yet (apps started before us, or explorer restarted): ask them to register again
@@ -1466,7 +1482,7 @@ unsafe fn hv(key: i32, on: bool) -> f32 {
     let now = now_ms();
     let target = if on { 1.0 } else { 0.0 };
     let v = HV.with_borrow_mut(|m| {
-        let e = m.entry(key).or_insert((0.0, now));
+        let e = m.entry((if key < 1_000_000 { bars::active() as usize } else { 0 }, key)).or_insert((0.0, now));
         let dt = now.saturating_sub(e.1).min(50) as f32; // a long pause must not make the first frame jump
         e.1 = now;
         e.0 = if e.0 < target { (e.0 + dt / 130.0).min(target) } else { (e.0 - dt / 180.0).max(target) };
@@ -1488,20 +1504,20 @@ unsafe fn glow(dc: HDC, key: i32, on: bool, r: RECT, from: u32, to: u32, rad: i3
 }
 
 thread_local! {
-    static PRESS: Cell<(i32, u64)> = const { Cell::new((i32::MIN, 0)) }; // last clicked element and when
+    static PRESS: Cell<(HWND, i32, u64)> = const { Cell::new((null_mut(), i32::MIN, 0)) };
     static SEEN: RefCell<HashMap<isize, u64>> = RefCell::new(HashMap::new()); // when each taskbar button first showed
 }
 
 /// Marks `key` as just clicked / dropped on: its highlight flashes and its icon squeezes for a moment.
 unsafe fn press(key: i32) {
-    PRESS.set((key, now_ms()));
+    PRESS.set((bars::active(), key, now_ms()));
 }
 
 /// 1.0 right after the click, easing to 0 over 320 ms (keeps the painter running meanwhile).
 unsafe fn press_t(key: i32) -> f32 {
-    let (k, t0) = PRESS.get();
+    let (bar, k, t0) = PRESS.get();
     let t = now_ms().saturating_sub(t0) as f32 / 320.0;
-    if k != key || t >= 1.0 {
+    if bar != bars::active() || k != key || t >= 1.0 {
         return 0.0;
     }
     BUSY.set(true);
@@ -1528,22 +1544,23 @@ unsafe fn appear(key: isize) -> f32 {
 /// How far the bar sits below its place: it rises in at start and drops out of the way (and back) when a fullscreen
 /// window takes the screen.
 fn bar_off() -> i32 {
-    ((1.0 - ease(BAR_P.get())) * (bar_h() + dock_gap()) as f32) as i32
+    ((1.0 - ease(bars::state().progress.get())) * (bar_h() + dock_gap()) as f32) as i32
 }
 
 unsafe fn bar_anim(hwnd: HWND) {
-    BAR_T.set(now_ms());
+    let _context = bars::enter(hwnd);
+    bars::state().last_step.set(now_ms());
     SetTimer(hwnd, 5, 15, None);
 }
 
 unsafe fn bar_step(hwnd: HWND) {
-    // hides for a fullscreen game or video, and with "auto-hide" on while the pointer is away (never otherwise: not over the desktop, not in any style)
-    let target = if FULLSCREEN.load(Relaxed) || (i18n::style::autohide() && DESK_HIDE.load(Relaxed)) { 0.0 } else { 1.0 };
+    let state = bars::state();
+    let target = if state.fullscreen.get() || (i18n::style::autohide() && state.idle.get()) { 0.0 } else { 1.0 };
     let now = now_ms();
-    let dt = now.saturating_sub(BAR_T.replace(now)).min(50) as f32;
-    let p = BAR_P.get();
+    let dt = now.saturating_sub(state.last_step.replace(now)).min(50) as f32;
+    let p = state.progress.get();
     let p = if p < target { (p + dt / 380.0).min(target) } else { (p - dt / 240.0).max(target) };
-    BAR_P.set(p);
+    state.progress.set(p);
     if p > 0.0 && IsWindowVisible(hwnd) == 0 {
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     }
@@ -1557,8 +1574,8 @@ unsafe fn bar_step(hwnd: HWND) {
     }
 }
 
-/// True when the foreground window covers the whole primary monitor (game, F11 video, presentation).
-/// A maximized window does not: the bar's reserved strip keeps it below the bar.
+/// The visual frame must cover this monitor. Resize borders outside a normal
+/// maximized window and temporary changes to the work area do not count.
 unsafe fn fullscreen_now(bar: HWND) -> bool {
     let fg = GetForegroundWindow();
     if fg.is_null() || fg == bar || IsWindowVisible(fg) == 0 || IsIconic(fg) != 0 {
@@ -1566,68 +1583,49 @@ unsafe fn fullscreen_now(bar: HWND) -> bool {
     }
     let mut cls = [0u16; 64];
     let n = GetClassNameW(fg, cls.as_mut_ptr(), 64).max(0) as usize;
-    if matches!(String::from_utf16_lossy(&cls[..n]).as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "RustExplorer") {
+    if matches!(String::from_utf16_lossy(&cls[..n]).as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "RustExplorer" | "topbar" | "topbar_secondary") {
         return false; // the desktop itself is full size (rs-shell's desktop is a rust-explorer window; a file manager is never "fullscreen")
     }
+    let style = GetWindowLongW(fg, GWL_STYLE) as u32;
+    // True fullscreen windows drop the caption/resize frame, even if their old placement was maximized.
+    if style & WS_CAPTION == WS_CAPTION || (IsZoomed(fg) != 0 && style & WS_THICKFRAME != 0) { return false; }
     let mut r: RECT = zeroed();
-    GetWindowRect(fg, &mut r);
+    if DwmGetWindowAttribute(fg, 9, &mut r as *mut _ as *mut _, size_of::<RECT>() as u32) < 0
+        && GetWindowRect(fg, &mut r) == 0 { return false; }
     let mut mi: MONITORINFO = zeroed();
     mi.cbSize = size_of::<MONITORINFO>() as u32;
-    GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST), &mut mi);
+    if GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST), &mut mi) == 0 { return false; }
     let m = mi.rcMonitor;
-    (m.left, m.top) == (0, 0) && r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
-}
-
-/// True when no app window is on screen (none open, or all minimized: Win+D): the user is looking at the desktop.
-unsafe fn desktop_now() -> bool {
-    BTNS.with_borrow(|b| b.iter().flat_map(|b| &b.wins).all(|&w| IsIconic(w) != 0))
+    bars::same_rect(m, bars::screen()) && r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
 }
 
 unsafe fn fs_update(hwnd: HWND) {
     let fs = fullscreen_now(hwnd);
+    let state = bars::state();
     // a fullscreen game keeps the screen: the pointer at the bottom edge does not bring the bar (games park it at the
     // edges all the time); Win opens Start, which brings the bar with it
     let mut pt = POINT { x: 0, y: 0 };
     GetCursorPos(&mut pt);
-    // desktop in front: the bar leaves 2 s after the pointer does and comes back at the bottom edge (an open flyout keeps it)
     let now = now_ms();
-    let sh = GetSystemMetrics(SM_CYSCREEN);
-    let sw = GetSystemMetrics(SM_CXSCREEN);
+    let m = bars::screen();
+    let on_screen = (m.left..m.right).contains(&pt.x) && (m.top..m.bottom).contains(&pt.y);
+    let reveal = if state.progress.get() > 0.0 { bar_h() + dock_gap() } else { 1 };
     let over = if vert() {
-        if i18n::style::side() == i18n::style::Side::Left { pt.x <= 0 || (pt.x < bar_h() && BAR_P.get() > 0.0) } else { pt.x >= sw - 1 || (pt.x >= sw - bar_h() && BAR_P.get() > 0.0) }
-    } else if at_top() { pt.y <= 0 || (pt.y < bar_h() && BAR_P.get() > 0.0) } else { pt.y >= sh - 1 || (pt.y >= sh - bar_h() - dock_gap() && BAR_P.get() > 0.0) };
-    if fs || !(i18n::style::autohide() || desktop_now() || dock_covered()) || fly::any_open() || over {
-        DESK_T.set(now);
+        if i18n::style::side() == i18n::style::Side::Left { pt.x < m.left + reveal } else { pt.x >= m.right - reveal }
+    } else if at_top() { pt.y < m.top + reveal } else { pt.y >= m.bottom - reveal };
+    if fs || !i18n::style::autohide() || fly::open_on(hwnd) || (on_screen && over) {
+        state.last_interaction.set(now);
     }
-    let desk = !fs && now.saturating_sub(DESK_T.get()) >= 2000;
-    if DESK_HIDE.swap(desk, Relaxed) != desk {
+    let idle = !fs && now.saturating_sub(state.last_interaction.get()) >= 2000;
+    let fullscreen_changed = state.fullscreen.replace(fs) != fs;
+    let idle_changed = state.idle.replace(idle) != idle;
+    if fullscreen_changed && fs {
+        if fly::open_on(hwnd) { fly::close_now(); }
+        hide_tip(hwnd);
+    }
+    if fullscreen_changed || idle_changed {
         bar_anim(hwnd);
     }
-    if FULLSCREEN.swap(fs, Relaxed) != fs {
-        if fs {
-            fly::close_now();
-            hide_tip(hwnd);
-        }
-        bar_anim(hwnd);
-    }
-}
-
-/// The dock is in the way of the window in front (one dragged down under it): it hides like over the
-/// desktop and comes back when the pointer touches the bottom edge.
-unsafe fn dock_covered() -> bool {
-    if !dock() {
-        return false;
-    }
-    let fg = GetForegroundWindow();
-    // a maximized window never hides the dock (it could stay gone until the window was restored)
-    if fg.is_null() || IsIconic(fg) != 0 || IsZoomed(fg) != 0 || fg == BAR.load(Relaxed) as HWND || fly::any_open() {
-        return false;
-    }
-    let mut r: RECT = zeroed();
-    GetWindowRect(fg, &mut r);
-    let (x, w) = bar_x_w();
-    let top = GetSystemMetrics(SM_CYSCREEN) - bar_h() - dock_gap();
-    r.bottom > top && r.right > x && r.left < x + w
 }
 
 /// SetForegroundWindow that also works when the request comes from a keyboard hook (we have not "received input" then):
@@ -2053,7 +2051,7 @@ unsafe fn paint_vert(dc: HDC, cr: RECT, fonts: [HFONT; 4]) {
     let (lft, rgt) = (sc(6), cr.right - sc(6));
     let cx = (lft + rgt) / 2;
     let left = i18n::style::side() == i18n::style::Side::Left;
-    let hot = HOT.get();
+    let hot = bars::state().hot.get();
     let active_bg = mix(pal().active, pal().accent, 0.12);
     let cell = |y: i32, len: i32| RECT { left: lft, top: y, right: rgt, bottom: y + len };
     let dim = mix(pal().dim, pal().text, 0.5);
@@ -2198,7 +2196,7 @@ unsafe fn paint(hwnd: HWND) {
     let (top, bot) = (sc(4), h - sc(4));
     let mid = (top + bot) / 2;
     let cell = |x: i32, w: i32| RECT { left: x, top, right: x + w, bottom: bot };
-    let hot = HOT.get();
+    let hot = bars::state().hot.get();
     let active_bg = mix(pal().active, pal().accent, 0.12); // the focused app's button: a hint of the accent, not plain grey
 
     // the gear at the left end: the Style menu
@@ -2603,7 +2601,7 @@ unsafe fn open_launcher() -> bool {
 
 /// The gear menu controls the language, appearance and placement of the bar.
 unsafe fn style_menu() {
-    let bar = BAR.load(Relaxed) as HWND;
+    let bar = bars::active();
     let names = [t!("Обычный", "Normal"), t!("Терминал", "Terminal"), t!("Плавающий док", "Floating dock"), t!("Тайлинг", "Tiling"), t!("Белая дорога", "White road"), t!("Рубин", "Ruby"), t!("Современный", "Modern")];
     let mut items: Vec<fly::MItem> = i18n::style::ALL.iter().zip(names).map(|(&s, n)| fly::MItem::new(n).on(s == style())).collect();
     items.push(fly::MItem::new(t!("Разложить окна плиткой", "Tile the windows")).sep());
@@ -2630,24 +2628,21 @@ unsafe fn style_menu() {
         match i18n::style::ALL.get(i) {
             Some(&s) => {
                 i18n::style::set_style(s);
-                place(bar);
+                bars::place_all();
             }
             None if i == tile => tile_windows(),
             None if i == tile + 1 => {
                 i18n::style::set_autohide(!i18n::style::autohide());
-                place(bar);
-                bar_anim(bar);
+                bars::place_all();
             }
             None if i == tile + 5 => {
                 i18n::style::set_align_left(!i18n::style::align_left());
-                place(bar);
-                bar_anim(bar);
+                bars::repaint();
             }
             None => {
                 if let Some(&(side, _)) = sides.get(i - tile - 2) {
                     i18n::style::set_side(side);
-                    place(bar);
-                    bar_anim(bar);
+                    bars::place_all();
                 }
             }
         }
@@ -2656,7 +2651,7 @@ unsafe fn style_menu() {
 
 /// Right click on Start: the Win+X menu (Explorer's own is gone with the bar).
 unsafe fn start_menu() {
-    let bar = BAR.load(Relaxed) as HWND;
+    let bar = bars::active();
     // (label, target); "!" targets are actions of ours, the rest goes through `open`
     let tools: [(&str, &str, &str); 14] = [
         ("Приложения и возможности", "Apps and Features", "ms-settings:appsfeatures"),
@@ -2729,8 +2724,8 @@ unsafe fn click(h: i32, left: bool, mid: bool) {
             }
         }
         // Left opens the picker, right switches straight to the next layout.
-        LANG if left => lang_menu(BAR.load(Relaxed) as HWND),
-        LANG => next_lang(BAR.load(Relaxed) as HWND, false),
+        LANG if left => lang_menu(bars::active()),
+        LANG => next_lang(bars::active(), false),
         WIFI_I => fly::toggle(if left { fly::Kind::Quick } else { fly::Kind::Wifi }), // right click: the network list
         VOL_I | BAT_I => fly::toggle(fly::Kind::Quick),
         CLOCK if left => fly::toggle(fly::Kind::Cal),
@@ -2808,7 +2803,7 @@ unsafe fn min_rect(info: *mut ShellHookInfo, bar: HWND) {
 /// Screen x of the middle of a bar element, for its tooltip and menus.
 unsafe fn tip_cx(l: &Layout, h: i32) -> i32 {
     // along the bar: screen x for a bottom bar, screen y for a side bar
-    (if vert() { 0 } else { bar_x_w().0 }) + match h {
+    axis_origin() + match h {
         GEAR => sc(GEAR_X.0 + GEAR_X.1 / 2),
         SEARCH => l.position(SEARCH) + l.bw / 2,
         CLOCK => (l.clock.0 + l.clock.1) / 2,
@@ -2838,6 +2833,8 @@ unsafe fn appbar_new(hwnd: HWND) {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let _context = bars::enter(hwnd);
+    let is_main = bars::main_bar(hwnd);
     if msg != 0 && msg == SH_MSG.get() {
         if wp == 5 && lp != 0 {
             min_rect(lp as *mut ShellHookInfo, hwnd); // HSHELL_GETMINRECT
@@ -2848,10 +2845,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     if msg != 0 && msg == TB_MSG.get() {
         // also our own announce(): act only when explorer's taskbar is a new window (explorer restarted / came back)
         let t = tray()[0];
-        if !t.is_null() && t != EXP_TRAY.get() {
+        if is_main && !t.is_null() && t != EXP_TRAY.get() {
             appbar_new(hwnd);
             hide_taskbar();
-            place(hwnd);
+            bars::place_all();
         }
         return 0;
     }
@@ -2860,7 +2857,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_ERASEBKGND => return 1,
         WM_TIMER if wp == 2 => {
             KillTimer(hwnd, 2);
-            let h = HOT.get();
+            let h = bars::state().hot.get();
             if h != NONE && !fly::any_open() {
                 show_tip(tip_text(h), tip_cx(&bar_layout(hwnd), h));
             }
@@ -2887,7 +2884,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             InvalidateRect(hwnd, null(), 0);
         }
         WM_DROPFILES => on_drop(hwnd, wp as HDROP),
-        WM_TIMER => {
+        WM_TIMER if is_main && wp == 1 => {
             hide_taskbar_if_shown();
             refresh();
             // repaint (GDI+, the costly part) only when something shown changed; every 10th tick anyway as a safety net
@@ -2895,7 +2892,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let s = view_sig();
             if s != last || quiet >= 10 {
                 SIG.set((s, 0));
-                InvalidateRect(hwnd, null(), 0);
+                bars::repaint();
             } else {
                 SIG.set((s, quiet + 1));
             }
@@ -2904,7 +2901,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let h = hit(hwnd, (lp & 0xffff) as i16 as i32, (lp >> 16) as i16 as i32);
             let mut tme = TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
             TrackMouseEvent(&mut tme);
-            if HOT.replace(h) != h {
+            if bars::state().hot.replace(h) != h {
                 hide_tip(hwnd);
                 if h != NONE {
                     SetTimer(hwnd, 2, 450, None);
@@ -2914,7 +2911,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_MOUSELEAVE => {
             hide_tip(hwnd);
-            HOT.set(-1);
+            bars::state().hot.set(NONE);
             InvalidateRect(hwnd, null(), 0);
         }
         WM_MOUSEWHEEL => {
@@ -2936,7 +2933,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 press(h);
             }
             if h == NONE && msg == WM_RBUTTONDOWN {
-                fly::context_menu(x); // right click on an empty spot
+                fly::context_menu(axis_origin() + x); // right click on an empty spot
             } else if h >= 1 && msg == WM_RBUTTONDOWN {
                 app_menu(hwnd, h);
             } else {
@@ -2951,15 +2948,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 place(hwnd);
             }
         }
-        WM_DISPLAYCHANGE => place(hwnd),
+        WM_DISPLAYCHANGE if is_main => bars::sync(),
+        WM_DESTROY if !is_main => {
+            bars::remove(hwnd);
+            HV.with_borrow_mut(|hover| hover.retain(|&(bar, _), _| bar != hwnd as usize));
+        }
         WM_DESTROY => {
             let mut ab: APPBARDATA = zeroed();
             ab.cbSize = size_of::<APPBARDATA>() as u32;
             ab.hWnd = hwnd;
             SHAppBarMessage(ABM_REMOVE, &mut ab);
-            if find_other("Shell_TrayWnd").is_null() {
-                set_work_area(RECT { left: 0, top: 0, right: GetSystemMetrics(SM_CXSCREEN), bottom: GetSystemMetrics(SM_CYSCREEN) }); // ours: give the strip back
-            }
+            bars::destroy_secondary();
+            if find_other("Shell_TrayWnd").is_null() { bars::release_work_areas(); }
             show_taskbar(OLD_STATE.get());
             forget_taskbar_state();
             DestroyWindow(HOST.replace(null_mut()));
@@ -2976,9 +2976,7 @@ fn main() {
         if std::env::args().any(|a| a == "--restore") {
             show_taskbar(saved_taskbar_state().unwrap_or(ABS_ALWAYSONTOP as usize));
             forget_taskbar_state();
-            if find_other("Shell_TrayWnd").is_null() {
-                set_work_area(RECT { left: 0, top: 0, right: GetSystemMetrics(SM_CXSCREEN), bottom: GetSystemMetrics(SM_CYSCREEN) }); // a killed bar's reserved strip
-            }
+            if find_other("Shell_TrayWnd").is_null() { bars::release_work_areas(); }
             announce(); // a killed bar took its tray icons with it; apps re-register with explorer
             return;
         }
@@ -3072,12 +3070,12 @@ fn main() {
             }
             RegisterShellHookWindow(hwnd);
         }
+        BAR.store(hwnd as isize, Relaxed);
         hide_taskbar();
-        place(hwnd);
+        bars::sync();
         refresh();
         announce(); // apps already running re-add their icons to us
         SetTimer(hwnd, 1, 500, None);
-        BAR.store(hwnd as isize, Relaxed);
         bar_anim(hwnd); // the bar slides in (it starts hidden above the screen)
         SetTimer(hwnd, 3, 250, None); // fullscreen watch
         thread::spawn(|| {

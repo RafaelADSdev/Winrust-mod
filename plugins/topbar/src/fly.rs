@@ -114,6 +114,7 @@ thread_local! {
     static CONFIRM: Cell<i32> = const { Cell::new(-1) };
     static LAST: Cell<(Option<Kind>, u64)> = const { Cell::new((None, 0)) }; // which flyout closed when
     static FIN: Cell<(i32, i32)> = const { Cell::new((0, 0)) }; // where the open flyout rests
+    static FLY_BAR: Cell<HWND> = const { Cell::new(null_mut()) };
     static T0: Cell<u64> = const { Cell::new(0) }; // when it started opening
     static JUST: RefCell<(String, u64)> = const { RefCell::new((String::new(), 0)) }; // the app pinned last and when: its row pulses
     static GHOST: Cell<(HWND, u64, (i32, i32))> = const { Cell::new((null_mut(), 0, (0, 0))) }; // the closing flyout: window, start, position
@@ -788,13 +789,13 @@ pub(super) fn language_menu(x: i32) {
     let items = Language::ALL.iter().map(|&entry| MItem::new(entry.label()).on(entry == current)).collect();
     menu(x, None, items, |choice| {
         let Some(&selected) = Language::ALL.get(choice) else { return };
-        let bar = BAR.load(Relaxed) as HWND;
+        let bar = bars::active();
         unsafe {
             if let Err(e) = set_language(selected) {
                 let message = tf!("Не удалось сохранить язык: {e}", "Could not save the language: {e}", "Não foi possível salvar o idioma: {e}");
                 MessageBoxW(bar, wide(&message).as_ptr(), wide("WinRust").as_ptr(), MB_ICONERROR);
             } else {
-                InvalidateRect(bar, null(), 0);
+                bars::repaint();
             }
         }
     });
@@ -897,7 +898,8 @@ pub fn toggle(k: Kind) {
     }
     close();
     unsafe {
-        HV.with_borrow_mut(|m| m.retain(|k, _| *k < 1_000_000)); // flyout keys are >= 1_000_000: no stale glow from the last panel
+        HV.with_borrow_mut(|m| m.retain(|&(_, key), _| key < 1_000_000));
+        FLY_BAR.set(bars::active());
         CTX.set(None);
         QUERY.set(String::new());
         SELALL.set(false);
@@ -927,14 +929,14 @@ pub fn toggle(k: Kind) {
             _ => {}
         }
         let (w, h) = (sc(size(k).0), sc(size(k).1));
-        let sw = GetSystemMetrics(SM_CXSCREEN);
+        let m = bars::screen();
         let x = if vert() { side_x(w) } else { match k {
-            Kind::Start => (sw - w) / 2,
-            Kind::Menu => MENU_X.get().min(sw - w - sc(8)).max(sc(8)),
-            _ => sw - w - sc(8),
+            Kind::Start => m.left + (m.right - m.left - w) / 2,
+            Kind::Menu => clamp_popup(MENU_X.get(), m.left, m.right, w, sc(8)),
+            _ => m.right - w - sc(8),
         } };
         let class = wide("topbar_fly");
-        let fy = if vert() && k == Kind::Menu { (MENU_X.get() - h / 2).clamp(sc(8), GetSystemMetrics(SM_CYSCREEN) - h - sc(8)) } else { pop_y(h) }; // above the bar (below it at the top of the screen)
+        let fy = if vert() && k == Kind::Menu { clamp_popup(MENU_X.get() - h / 2, m.top, m.bottom, h, sc(8)) } else { pop_y(h) };
         let hw = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, class.as_ptr(), null(), WS_POPUP, x, fy + sc(14), w, h, null_mut(), null_mut(), GetModuleHandleW(null()), null());
         SetLayeredWindowAttributes(hw, 0, 0, LWA_ALPHA); // starts invisible, anim_step fades it in
         if k == Kind::Start {
@@ -955,6 +957,8 @@ pub fn toggle(k: Kind) {
         SetTimer(hw, 3, 15, None);
     }
 }
+
+pub fn open_on(bar: HWND) -> bool { FLY_BAR.get() == bar && any_open() }
 
 // ---------- actions ----------
 
@@ -1694,6 +1698,7 @@ unsafe fn paint(hw: HWND, k: Kind) {
 // ---------- window proc ----------
 
 unsafe extern "system" fn proc(hw: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let _context = bars::enter(FLY_BAR.get());
     if msg == WM_TIMER && wp == 3 {
         anim_step(hw); // also for the fading-out ghost window
         return 0;
