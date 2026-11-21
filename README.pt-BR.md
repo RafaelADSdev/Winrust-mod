@@ -22,7 +22,7 @@ Se o UAC pedir a senha de outra conta administrativa, as tarefas agendadas, o pe
 
 Para atualizar, execute o instalador mais recente e selecione os componentes desejados. O WinRust conserva suas preferências e os valores originais do Windows que foram salvos para restauração.
 
-Selecione **Português (Brasil)** pelo botão de idioma no canto superior direito do instalador ou pelo item **Idioma do WinRust** no menu de contexto da barra. Reabra as janelas do WinRust para que leiam a preferência.
+O idioma padrão é **Português (Brasil)**. Para selecionar outro idioma, use o botão no canto superior direito do instalador ou abra **Idioma do WinRust** no menu de contexto da barra. Reabra as janelas do WinRust para aplicar a preferência.
 
 ## Remoção
 

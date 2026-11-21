@@ -14,11 +14,12 @@ use windows_sys::Win32::{
 
 use crate::pt_br;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Language {
     English = 1,
     Russian = 2,
+    #[default]
     Portuguese = 3,
 }
 
@@ -49,13 +50,13 @@ impl Language {
     }
 
     fn parse(value: &str) -> Self {
-        let value = value.trim();
-        if value.eq_ignore_ascii_case("ru") {
-            Self::Russian
-        } else if value.eq_ignore_ascii_case("pt-BR") || value.eq_ignore_ascii_case("pt") {
-            Self::Portuguese
-        } else {
+        let value = value.trim().trim_start_matches('\u{feff}').trim();
+        if value.eq_ignore_ascii_case("en") {
             Self::English
+        } else if value.eq_ignore_ascii_case("ru") {
+            Self::Russian
+        } else {
+            Self::default()
         }
     }
 }
@@ -71,13 +72,13 @@ pub fn language() -> Language {
     if saved == 0 {
         let language = preference_file()
             .and_then(|file| std::fs::read_to_string(file).ok())
-            .map_or(Language::English, |text| Language::parse(&text));
+            .map_or_else(Language::default, |text| Language::parse(&text));
         let _ = LANGUAGE.compare_exchange(0, language as u8, Relaxed, Relaxed);
     }
     match LANGUAGE.load(Relaxed) {
+        1 => Language::English,
         2 => Language::Russian,
-        3 => Language::Portuguese,
-        _ => Language::English,
+        _ => Language::default(),
     }
 }
 
@@ -147,6 +148,8 @@ mod tests {
         }
         assert_eq!(Language::parse("pt-br\r\n"), Language::Portuguese);
         assert_eq!(Language::parse(" PT "), Language::Portuguese);
-        assert_eq!(Language::parse("unknown"), Language::English);
+        assert_eq!(Language::parse("\u{feff}EN"), Language::English);
+        assert_eq!(Language::parse("unknown"), Language::Portuguese);
+        assert_eq!(Language::parse(""), Language::Portuguese);
     }
 }
