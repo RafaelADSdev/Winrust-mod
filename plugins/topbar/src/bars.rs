@@ -187,7 +187,7 @@ pub(super) unsafe fn sync() {
     for screen in monitors.into_iter().filter(|screen| !screen.primary) {
         if WINDOWS.with_borrow(|windows| windows.values().any(|state| state.monitor.get() == screen.monitor)) { continue; }
         let bounds = screen.bounds;
-        let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, class.as_ptr(), null(),
+        let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED, class.as_ptr(), null(),
             WS_POPUP, bounds.left, bounds.bottom - bar_h(), bounds.right - bounds.left, bar_h(), null_mut(), null_mut(), instance, null());
         if hwnd.is_null() { continue; }
         WINDOWS.with_borrow_mut(|windows| windows.insert(hwnd, Rc::new(State::new(screen.monitor))));

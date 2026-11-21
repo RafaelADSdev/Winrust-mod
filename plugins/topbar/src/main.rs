@@ -47,7 +47,7 @@ use windows_sys::Win32::{
     },
     NetworkManagement::WiFi::*,
     System::{
-        LibraryLoader::{GetModuleHandleW, GetProcAddress},
+        LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW},
         Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS},
         SystemInformation::{GetLocalTime, GetTickCount64},
         Threading::{OpenProcess, QueryFullProcessImageNameW, TerminateProcess},
@@ -140,9 +140,10 @@ const ALT_UP: u32 = WM_APP + 12; // posted by the keyboard hook: Alt released wh
 static SWITCHING: AtomicBool = AtomicBool::new(false); // Alt+Tab switcher open (the hook thread reads it)
 static WIN_ALONE: AtomicBool = AtomicBool::new(false);
 static BAR: AtomicIsize = AtomicIsize::new(0); // the bar window, for the hook thread
+const WIN_NUM: u32 = WM_APP + 15; // posted by the keyboard hook: Win+1..9 (wp 0..8) = the n-th button of the bar
+const LANG_CYCLE: u32 = WM_APP + 16; // Win+Space (wp 1 = Shift held: previous layout)
 const VOLKEY: u32 = WM_APP + 14; // posted by the keyboard hook: a volume key (wp 0 up, 1 down, 2 mute)
 const SNIP: u32 = WM_APP + 13; // posted by the keyboard hook: PrtSc / Win+Shift+S with no explorer to handle them
-const LANG_CYCLE: u32 = WM_APP + 15;
 static LANG_SPACE_HELD: AtomicBool = AtomicBool::new(false);
 static EXPLORER_UP: AtomicBool = AtomicBool::new(true); // explorer's taskbar exists (it handles PrtSc itself then); refreshed by the bar
 
@@ -244,7 +245,9 @@ fn sc(v: i32) -> i32 {
     (v as f32 * SCALE.get()) as i32
 }
 fn bar_h() -> i32 {
-    if vert() { sc(60) } else { sc(if style() == Style::Modern { 48 } else { BAR_H }) }
+    let height = if vert() { 60 } else if style() == Style::Modern { 48 } else { BAR_H };
+    let delta = [-6, 0, 8][i18n::style::bar_size() as usize];
+    sc(height + delta)
 }
 /// Screen y of this bar's top edge when it is in place.
 unsafe fn bar_top() -> i32 {
@@ -689,6 +692,21 @@ unsafe fn alt_tab(back: bool) {
     if IsWindowVisible(sw) == 0 {
         let mut v: Vec<HWND> = Vec::new();
         EnumWindows(Some(collect), &mut v as *mut _ as LPARAM); // z-order: the active window first, then the one before it
+        // per monitor: only the windows on the active window's monitor (when there is another one to switch to), shown on that monitor
+        let mut mon = RECT { left: 0, top: 0, right: GetSystemMetrics(SM_CXSCREEN), bottom: GetSystemMetrics(SM_CYSCREEN) };
+        if i18n::style::alttab_per_monitor() && !v.is_empty() {
+            let of = |w: HWND| MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST);
+            let m0 = of(v[0]);
+            let mut mi: MONITORINFO = zeroed();
+            mi.cbSize = size_of::<MONITORINFO>() as u32;
+            if GetMonitorInfoW(m0, &mut mi) != 0 {
+                let same: Vec<HWND> = v.iter().copied().filter(|&w| of(w) == m0).collect();
+                if same.len() > 1 {
+                    v = same;
+                    mon = mi.rcMonitor;
+                }
+            }
+        }
         let n = v.len();
         if n == 0 {
             return SWITCHING.store(false, Relaxed);
@@ -698,10 +716,10 @@ unsafe fn alt_tab(back: bool) {
             let r = switcher::panel(GetForegroundWindow(), n);
             (r.left, r.top, r.right - r.left, r.bottom - r.top)
         } else {
-            let scr = GetSystemMetrics(SM_CXSCREEN);
+            let scr = mon.right - mon.left;
             let w = (n as i32 * sc(SW_CELL)).min(scr - sc(80)) + 2 * sc(SW_PAD);
             let h = sc(SW_PAD) + sc(SW_CELL) + sc(SW_TITLE) + sc(SW_PAD) / 2;
-            ((scr - w) / 2, (GetSystemMetrics(SM_CYSCREEN) - h) / 2, w, h)
+            (mon.left + (scr - w) / 2, mon.top + (mon.bottom - mon.top - h) / 2, w, h)
         };
         SetWindowRgn(sw, CreateRoundRectRgn(0, 0, w + 1, h + 1, rr(18), rr(18)), 1);
         SetWindowPos(sw, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -860,6 +878,7 @@ unsafe fn hide_taskbar_if_shown() {
 
 /// Reserves this bar's edge so maximized windows stop at it.
 unsafe fn place(hwnd: HWND) {
+    apply_opacity(hwnd);
     let m = bars::screen();
     let strip = if dock() || i18n::style::autohide() { 0 } else { bar_h() };
     let edge = match i18n::style::side() {
@@ -1096,6 +1115,17 @@ unsafe fn fix_msix_pin(lnk: &[u16], target: &str) -> Option<String> {
     Some(new)
 }
 
+fn pin_order_file() -> PathBuf {
+    appdata_file("topbar-pin-order.txt")
+}
+
+/// The pins' current order, as the .lnk file names, one per line.
+unsafe fn save_pin_order() {
+    let text: String = PINS.with_borrow(|p| p.iter().map(|x| format!("{}
+", std::path::Path::new(&wstr_of(&x.lnk)).file_name().unwrap_or_default().to_string_lossy())).collect());
+    let _ = std::fs::write(pin_order_file(), text);
+}
+
 /// Pinned apps (the .lnk files Windows keeps for the taskbar) with their icons and target exe.
 unsafe fn load_pins() {
     let Some(appdata) = std::env::var_os("APPDATA") else { return };
@@ -1103,6 +1133,9 @@ unsafe fn load_pins() {
     let mut files: Vec<_> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk"))).collect();
     files.sort();
     files.sort_by_key(|f| std::cmp::Reverse(lnk_uses(f))); // most used first (stable: ties stay alphabetical)
+    // an order the user set (Move left / right) wins; pins not in it keep the order above, after the listed ones
+    let order: Vec<String> = std::fs::read_to_string(pin_order_file()).unwrap_or_default().lines().map(|l| l.to_lowercase()).collect();
+    files.sort_by_key(|f| order.iter().position(|n| *n == f.file_name().unwrap_or_default().to_string_lossy().to_lowercase()).unwrap_or(usize::MAX));
     for f in files {
         let lnk = wide(&f.to_string_lossy());
         let target = lnk_target(&lnk);
@@ -1363,6 +1396,7 @@ fn refresh() {
         let up = !find_other("Shell_TrayWnd").is_null();
         if EXPLORER_UP.swap(up, Relaxed) && !up {
             bars::place_all(); // the Explorer instance opened for Settings took the work-area reservation with it
+            announce(); // register the icons that were in Explorer's hidden tray
         }
         if TAPPS.with_borrow(|t| t.is_empty()) && n % 8 == 4 {
             announce(); // no icons yet (apps started before us, or explorer restarted): ask them to register again
@@ -1426,7 +1460,7 @@ fn layout(w: i32) -> Layout {
     let apps = (sys.0 - sc(24) * tray_count() as i32, sys.0);
     let margin = (w - apps.0) + sc(8); // keep the button group centered and clear of both sides
     let n = BTNS.with_borrow(|b| b.len()) as i32 + 1; // + the search slot
-    let bw = (((w - 2 * margin + gap) / n.max(1)) - gap).clamp(sc(16), sc(44));
+    let bw = (((w - 2 * margin + gap) / n.max(1)) - gap).clamp(sc(16), sc(44 + [-6, 0, 8][i18n::style::bar_size() as usize % 3]));
     // centered on search + Start + pins only: opening an unpinned window adds a button on the right instead of shifting Start left
     let fixed = (PINS.with_borrow(|p| p.len()) as i32 + 2).min(n);
     // ...but never so far right that the windows' buttons run into the tray: then the whole row shifts left
@@ -1635,6 +1669,32 @@ unsafe fn force_fg(hw: HWND) {
     SetFocus(hw); // detaching drops our thread's keyboard focus; without it the Start search box gets no typing
 }
 
+/// The Windows "Run" box. `rundll32 shell32.dll,#61` cannot do it: ordinal 61 is RunFileDlg(hwnd, icon, dir, title,
+/// prompt, flags) and rundll32 passes other arguments. Its own thread: the box runs a modal loop until closed.
+fn run_dialog() {
+    std::thread::spawn(|| unsafe {
+        let sh = LoadLibraryW(wide("shell32.dll").as_ptr());
+        if let Some(f) = GetProcAddress(sh, 61 as *const u8) {
+            type RunFileDlg = unsafe extern "system" fn(HWND, HICON, *const u16, *const u16, *const u16, u32);
+            std::mem::transmute::<_, RunFileDlg>(f)(null_mut(), null_mut(), null(), null(), null(), 0);
+        }
+    });
+}
+
+/// Win+R and the Start menu's "Run": rs-launcher's own Run mode when it runs (history, folder completion, the WinRust
+/// look), else the Windows box.
+unsafe fn run_box() {
+    let mut h: HWND = null_mut();
+    EnumWindows(Some(find_launcher), &mut h as *mut _ as LPARAM);
+    if h.is_null() {
+        return run_dialog();
+    }
+    let mut pid = 0;
+    GetWindowThreadProcessId(h, &mut pid);
+    AllowSetForegroundWindow(pid); // the card must take the keyboard, or the typing goes to the window below
+    PostMessageW(h, WM_HOTKEY, 2, 0); // id 2: Run mode (1 is its Alt+Space)
+}
+
 /// Win key on its own opens our Start. Runs on its own thread so a busy bar can never stall the system keyboard.
 unsafe extern "system" fn kb_hook(n: i32, w: WPARAM, l: LPARAM) -> LRESULT {
     if n >= 0 {
@@ -1690,6 +1750,26 @@ unsafe extern "system" fn kb_hook(n: i32, w: WPARAM, l: LPARAM) -> LRESULT {
                         keybd_event(0xE8, 0, KEYEVENTF_KEYUP, 0);
                     }
                     PostMessageW(BAR.load(Relaxed) as HWND, SNIP, snip_key as usize, 0); // wp 1: PrtSc, 0: Win+Shift+S
+                }
+                return 1;
+            }
+            // Win+1..9: the n-th app button of the bar (Windows 11 taskbar behaviour)
+            if (0x31..=0x39).contains(&k.vkCode) && (held(VK_LWIN) || held(VK_RWIN)) && !held(VK_CONTROL) && !held(VK_MENU) && !held(VK_SHIFT) {
+                if down0 {
+                    WIN_ALONE.store(false, Relaxed);
+                    keybd_event(0xE8, 0, 0, 0); // a key between Win down and up: no Start menu on release
+                    keybd_event(0xE8, 0, KEYEVENTF_KEYUP, 0);
+                    PostMessageW(BAR.load(Relaxed) as HWND, WIN_NUM, k.vkCode as usize - 0x31, 0);
+                }
+                return 1;
+            }
+            // Win+R: without explorer nobody opens the Run box
+            if !EXPLORER_UP.load(Relaxed) && k.vkCode == b'R' as u32 && (held(VK_LWIN) || held(VK_RWIN)) && !held(VK_CONTROL) && !held(VK_MENU) && !held(VK_SHIFT) {
+                if down0 {
+                    WIN_ALONE.store(false, Relaxed);
+                    keybd_event(0xE8, 0, 0, 0); // a key between Win down and up: no Start menu on release
+                    keybd_event(0xE8, 0, KEYEVENTF_KEYUP, 0);
+                    run_box();
                 }
                 return 1;
             }
@@ -2350,6 +2430,21 @@ unsafe fn close_window(w: HWND) {
     }
 }
 
+/// App id of the Store app a .lnk of a pin points into (its package folder), None for anything else.
+unsafe fn msix_app_id(lnk: &str) -> Option<String> {
+    let (family, _) = msix_family(&lnk_target(&wide(lnk)))?;
+    let prefix = format!("{family}!").to_lowercase();
+    fly::apps_folder().into_iter().map(|a| a.1).find(|id| id.to_lowercase().starts_with(&prefix))
+}
+
+/// Starts a Store app by its app id. false = it did not start (the caller falls back to explorer).
+unsafe fn activate_app(aumid: &str) -> bool {
+    use windows::Win32::UI::Shell::{ACTIVATEOPTIONS, ApplicationActivationManager, IApplicationActivationManager};
+    CoCreateInstance::<_, IApplicationActivationManager>(&ApplicationActivationManager, None, CLSCTX_ALL)
+        .and_then(|m| m.ActivateApplication(PCWSTR(wide(aumid).as_ptr()), PCWSTR::null(), ACTIVATEOPTIONS(0)))
+        .is_ok()
+}
+
 /// Opens a file, shortcut or URI through explorer, which starts it with the desktop user's normal token: the bar itself
 /// may run elevated (see the launcher), and everything started from it must not inherit that.
 unsafe fn open(path: &[u16]) {
@@ -2360,6 +2455,12 @@ unsafe fn open(path: &[u16]) {
     }
     if p.to_lowercase().starts_with("ms-settings:") {
         return winrust_common::settings::open(&p); // needs Explorer as shell: it is started for the time Settings is open
+    }
+    // Store (MSIX) apps: by app id through the activation manager. A path into the protected package folder ("no app
+    // associated") and shell:AppsFolder via explorer ("class not registered" when Explorer is not the shell) both fail.
+    let aumid = if p.to_lowercase().starts_with(r"shell:appsfolder\") { Some(p[r"shell:appsfolder\".len()..].to_string()) } else { msix_app_id(&p) };
+    if aumid.is_some_and(|id| activate_app(&id)) {
+        return;
     }
     // Always through explorer.exe: it starts the target with the desktop user's normal token. ShellExecuteW from here would
     // inherit this bar's admin rights, and an elevated app cannot receive files dragged in from normal windows (UIPI), and
@@ -2397,6 +2498,8 @@ unsafe fn app_menu(hwnd: HWND, h: i32) {
         Win(HWND),
         Open,
         Pin,
+        Left,
+        Right,
         Start,
         Close,
         Kill,
@@ -2410,7 +2513,7 @@ unsafe fn app_menu(hwnd: HWND, h: i32) {
     let sub = match (wins.len(), pin.is_some()) {
         (0, _) => t!("Закреплено · не запущено", "Pinned · not running").to_string(),
         (n, true) => tf!("Закреплено · {}", "Pinned · {}", "Fixado · {}", windows_ru(n)),
-        (n, false) => tf!("Запущено · {}", "Running · {}", "Correndo · {}", windows_ru(n)),
+        (n, false) => tf!("Запущено · {}", "Running · {}", "Em execução · {}", windows_ru(n)),
     };
     let icon = if picon.is_null() { bicon } else { picon };
     let mut items: Vec<(fly::MItem, A)> = Vec::new();
@@ -2429,6 +2532,15 @@ unsafe fn app_menu(hwnd: HWND, h: i32) {
         items.push((fly::MItem::new(t!("Открепить от панели", "Unpin from the bar")), A::Pin));
     } else if !exe.is_empty() {
         items.push((fly::MItem::new(t!("Закрепить на панели", "Pin to the bar")), A::Pin));
+    }
+    if let Some(p) = pin.filter(|_| !lnk.is_empty()) {
+        let n = PINS.with_borrow(|p| p.len());
+        if p > 0 {
+            items.push((fly::MItem::new(if vert() { t!("Выше", "Move up") } else { t!("Сдвинуть влево", "Move left") }), A::Left));
+        }
+        if p + 1 < n {
+            items.push((fly::MItem::new(if vert() { t!("Ниже", "Move down") } else { t!("Сдвинуть вправо", "Move right") }), A::Right));
+        }
     }
     if !launch.is_empty() {
         let s = fly::start_pinned(&launch);
@@ -2457,6 +2569,16 @@ unsafe fn app_menu(hwnd: HWND, h: i32) {
                     None => {}
                 }
                 refresh_buttons(); // the buttons hold indices into PINS: a stale one would index past the end on the next paint
+            }
+            Some(a @ (A::Left | A::Right)) => {
+                // by path again; the new order is saved and load_pins takes it
+                if let Some(p) = PINS.with_borrow(|p| p.iter().position(|x| wstr_of(&x.lnk) == lnk)) {
+                    let to = if matches!(a, A::Left) { p.wrapping_sub(1) } else { p + 1 };
+                    if PINS.with_borrow_mut(|v| (to < v.len()).then(|| v.swap(p, to))).is_some() {
+                        save_pin_order();
+                        refresh_buttons();
+                    }
+                }
             }
             Some(A::Start) => fly::start_toggle(&launch),
             Some(A::Close) => wins.iter().for_each(|&w| close_window(w)),
@@ -2599,53 +2721,221 @@ unsafe fn open_launcher() -> bool {
     true
 }
 
-/// The gear menu controls the language, appearance and placement of the bar.
+/// The gear's menu: a short main page that leads to pages for the theme, the colours, the templates and the bar itself
+/// (the look is saved for the other WinRust programs too). Picking on a page keeps it open, so choices can be tried in a row.
 unsafe fn style_menu() {
+    let anchor = tip_cx(&bar_layout(bars::active()), GEAR);
+    let items = vec![
+        fly::MItem::new(t!("Язык WinRust", "WinRust language")).hint(i18n::locale::language().short_label()),
+        fly::MItem::head(t!("Внешний вид", "Look")).sep(),
+        fly::MItem::new(t!("Тема", "Theme")).hint(style_name(style())).swatch(i18n::style::pal().accent),
+        fly::MItem::new(t!("Цвета и прозрачность", "Colors and transparency")).hint("›"),
+        fly::MItem::new(t!("Шаблоны", "Templates")).hint("›"),
+        fly::MItem::head(t!("Панель", "Bar")).sep(),
+        fly::MItem::new(t!("Положение, размер, поведение", "Position, size, behavior")).hint("›"),
+        fly::MItem::new(t!("Разложить окна плиткой", "Tile the windows")),
+        fly::MItem::new(t!("Сбросить всё по умолчанию…", "Reset everything to defaults…")).danger().sep(),
+    ];
+    gear_page("\u{E713}", t!("Настройки панели задач", "Taskbar settings"), "", items, move |i| match i {
+        0 => fly::language_menu(anchor),
+        2 => theme_page(),
+        3 => colors_page(),
+        4 => templates_page(),
+        6 => bar_page(),
+        7 => tile_windows(),
+        8 => reset_page(),
+        _ => {}
+    });
+}
+
+/// One page of the gear's menu, opened at the gear.
+unsafe fn gear_page(glyph: &'static str, title: &str, sub: &str, items: Vec<fly::MItem>, pick: impl FnOnce(usize) + 'static) {
     let bar = bars::active();
-    let names = [t!("Обычный", "Normal"), t!("Терминал", "Terminal"), t!("Плавающий док", "Floating dock"), t!("Тайлинг", "Tiling"), t!("Белая дорога", "White road"), t!("Рубин", "Ruby"), t!("Современный", "Modern")];
-    let mut items: Vec<fly::MItem> = i18n::style::ALL.iter().zip(names).map(|(&s, n)| fly::MItem::new(n).on(s == style())).collect();
-    items.push(fly::MItem::new(t!("Разложить окна плиткой", "Tile the windows")).sep());
-    items.push(fly::MItem::new(t!("Скрывать панель автоматически", "Hide the bar automatically")).on(i18n::style::autohide()));
-    let sides = [(i18n::style::Side::Bottom, t!("Панель снизу", "Bar at the bottom")), (i18n::style::Side::Left, t!("Панель слева", "Bar on the left")), (i18n::style::Side::Right, t!("Панель справа", "Bar on the right"))];
-    for (k, (s, n)) in sides.iter().enumerate() {
-        let mut it = fly::MItem::new(*n).on(i18n::style::side() == *s);
-        if k == 0 { it = it.sep(); }
-        items.push(it);
+    fly::menu(tip_cx(&bar_layout(bar), GEAR), Some((null_mut(), glyph, title.to_string(), sub.to_string())), items, pick);
+}
+
+fn back() -> fly::MItem {
+    fly::MItem::new(t!("‹   Назад", "‹   Back"))
+}
+
+fn style_name(s: i18n::style::Style) -> &'static str {
+    use i18n::style::Style::*;
+    match s {
+        Normal => t!("Обычный", "Normal"),
+        Terminal => t!("Терминал", "Terminal"),
+        Dock => t!("Плавающий док", "Floating dock"),
+        Tiling => t!("Тайлинг", "Tiling"),
+        Road => t!("Белая дорога", "White road"),
+        Ruby => t!("Рубин", "Ruby"),
+        Modern => t!("Современный", "Modern"),
     }
-    items.push(fly::MItem::new(t!("Кнопки слева (как в Windows 10)", "Buttons on the left (like Windows 10)")).on(i18n::style::align_left()).sep());
-    if let Some(first_style) = items.first_mut() {
-        first_style.sep = true;
+}
+
+unsafe fn theme_page() {
+    let mut items = vec![back()];
+    for (k, &s) in i18n::style::ALL.iter().enumerate() {
+        let it = fly::MItem::new(style_name(s)).swatch(i18n::style::PALS[k].accent).on(s == style());
+        items.push(if k == 0 { it.sep() } else { it });
     }
-    items.insert(0, fly::MItem::new(t!("Язык WinRust", "WinRust language")).hint(i18n::locale::language().short_label()));
-    let head = (null_mut(), "\u{E713}", t!("Настройки панели задач", "Taskbar settings").to_string(), String::new());
-    let tile = i18n::style::ALL.len();
-    let x = tip_cx(&bar_layout(bar), GEAR);
-    fly::menu(x, Some(head), items, move |index| {
-        let Some(i) = index.checked_sub(1) else {
-            fly::language_menu(x);
-            return;
-        };
-        match i18n::style::ALL.get(i) {
-            Some(&s) => {
-                i18n::style::set_style(s);
-                bars::place_all();
-            }
-            None if i == tile => tile_windows(),
-            None if i == tile + 1 => {
-                i18n::style::set_autohide(!i18n::style::autohide());
-                bars::place_all();
-            }
-            None if i == tile + 5 => {
-                i18n::style::set_align_left(!i18n::style::align_left());
-                bars::repaint();
-            }
-            None => {
-                if let Some(&(side, _)) = sides.get(i - tile - 2) {
-                    i18n::style::set_side(side);
-                    bars::place_all();
-                }
-            }
+    gear_page("\u{E790}", t!("Тема", "Theme"), t!("Готовый вид панели и окон", "A ready-made look for the bar and windows"), items, |i| {
+        let Some(&s) = i.checked_sub(1).and_then(|k| i18n::style::ALL.get(k)) else { return style_menu() };
+        i18n::style::set_style(s);
+        bars::place_all();
+        theme_page();
+    });
+}
+
+unsafe fn bar_page() {
+    use i18n::style::{self as st, Side};
+    let sides = [Side::Bottom, Side::Left, Side::Right];
+    let items = vec![
+        back(),
+        fly::MItem::head(t!("Положение", "Position")).sep(),
+        fly::MItem::new(t!("Снизу", "Bottom")).on(st::side() == Side::Bottom),
+        fly::MItem::new(t!("Слева", "Left")).on(st::side() == Side::Left),
+        fly::MItem::new(t!("Справа", "Right")).on(st::side() == Side::Right),
+        fly::MItem::head(t!("Размер", "Size")),
+        fly::MItem::new(t!("Маленькая", "Small")).on(st::bar_size() == 0),
+        fly::MItem::new(t!("Обычная", "Normal")).on(st::bar_size() == 1),
+        fly::MItem::new(t!("Большая", "Large")).on(st::bar_size() == 2),
+        fly::MItem::head(t!("Поведение", "Behavior")),
+        fly::MItem::new(t!("Скрывать автоматически", "Hide automatically")).on(st::autohide()),
+        fly::MItem::new(t!("Кнопки слева, как в Windows 10", "Buttons on the left, like Windows 10")).on(st::align_left()),
+        fly::MItem::new(t!("Alt+Tab: только этот монитор", "Alt+Tab: this monitor only")).on(st::alttab_per_monitor()),
+    ];
+    gear_page("\u{E8A1}", t!("Панель", "Bar"), t!("Где она, какого размера и как себя ведёт", "Where it sits, its size and behavior"), items, move |i| {
+        match i {
+            2..=4 => st::set_side(sides[i - 2]),
+            6..=8 => st::set_bar_size((i - 6) as u8),
+            10 => st::set_autohide(!st::autohide()), // the reserved strip comes or goes with it
+            11 => st::set_align_left(!st::align_left()),
+            12 => st::set_alttab_per_monitor(!st::alttab_per_monitor()),
+            _ => return style_menu(),
         }
+        bars::place_all();
+        bar_page();
+    });
+}
+
+/// Bar transparency from the colours page (the window is layered; 100 % = opaque).
+unsafe fn apply_opacity(hwnd: HWND) {
+    SetLayeredWindowAttributes(hwnd, 0, (255 * i18n::style::bar_opacity() as u32 / 100) as u8, LWA_ALPHA);
+}
+
+/// The user's own look: every colour of the bar and the WinRust windows, and the bar's transparency. Each colour opens
+/// the Windows colour dialog; the last row goes back to the chosen theme's colours.
+unsafe fn colors_page() {
+    use windows_sys::Win32::UI::Controls::Dialogs::{CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW};
+    const PCT: [u8; 5] = [100, 85, 70, 55, 40];
+    let colors = [
+        t!("Фон", "Background"),
+        t!("Линии и рамки", "Lines and borders"),
+        t!("Наведение", "Hover"),
+        t!("Нажатие и выбранное", "Pressed and selected"),
+        t!("Акцент", "Accent"),
+        t!("Текст", "Text"),
+        t!("Второстепенный текст", "Secondary text"),
+    ];
+    let cur = i18n::style::custom_colors().unwrap_or([u32::MAX; 7]);
+    let p = i18n::style::pal();
+    let now = [p.bg, p.line, p.hover, p.active, p.accent, p.text, p.dim]; // what is shown now: the dialog starts there
+    let mut items = vec![back(), fly::MItem::head(t!("Цвета (точка справа: изменён вами)", "Colors (dot on the right: changed by you)")).sep()];
+    items.extend(colors.iter().enumerate().map(|(i, n)| fly::MItem::new(*n).swatch(now[i]).on(cur[i] != u32::MAX)));
+    items.push(fly::MItem::head(t!("Непрозрачность панели", "Bar opacity")));
+    items.extend(PCT.iter().map(|&v| fly::MItem::new(if v == 100 { t!("100 %, без прозрачности", "100 %, solid").to_string() } else { format!("{v} %") }).on(i18n::style::bar_opacity() == v)));
+    items.push(fly::MItem::new(t!("Вернуть цвета темы", "Back to the theme's colors")).danger().sep());
+    let (c0, o0) = (2, 3 + colors.len()); // first colour row, first opacity row
+    gear_page("\u{E790}", t!("Цвета и прозрачность", "Colors and transparency"), t!("Поверх выбранной темы", "On top of the chosen theme"), items, move |i| {
+        let bar = bars::active();
+        if i == 0 {
+            return style_menu();
+        } else if (c0..c0 + colors.len()).contains(&i) {
+            static CUST: std::sync::Mutex<[u32; 16]> = std::sync::Mutex::new([0xFFFFFF; 16]);
+            let mut cust = CUST.lock().unwrap();
+            let mut cc: CHOOSECOLORW = zeroed();
+            cc.lStructSize = size_of::<CHOOSECOLORW>() as u32;
+            cc.hwndOwner = bar;
+            cc.rgbResult = now[i - c0];
+            cc.lpCustColors = cust.as_mut_ptr();
+            cc.Flags = CC_RGBINIT | CC_FULLOPEN;
+            if ChooseColorW(&mut cc) != 0 {
+                i18n::style::set_custom_color(i - c0, Some(cc.rgbResult));
+            }
+        } else if let Some(&v) = i.checked_sub(o0).and_then(|k| PCT.get(k)) {
+            i18n::style::set_bar_opacity(v);
+        } else {
+            i18n::style::reset_custom();
+        }
+        bars::place_all();
+        colors_page();
+    });
+}
+
+/// Saved looks (theme + colours + opacity): apply one, save what is on screen, delete.
+unsafe fn templates_page() {
+    use i18n::style::{ALL, PALS, Theme};
+    let list = i18n::style::themes();
+    let now = Theme::current("");
+    let mut items = vec![back(), fly::MItem::head(t!("Мои шаблоны", "My templates")).sep()];
+    if list.is_empty() {
+        items.push(fly::MItem::head(t!("Пока пусто: настройте вид и сохраните", "None yet: set up a look and save it")));
+    }
+    let first = items.len(); // index of the first template row
+    for th in &list {
+        let accent = if th.colors[4] != u32::MAX { th.colors[4] } else { PALS[ALL.iter().position(|&s| s == th.style).unwrap_or(0)].accent };
+        let same = (th.style, th.colors, th.opacity) == (now.style, now.colors, now.opacity);
+        items.push(fly::MItem::new(th.name.clone()).hint(style_name(th.style)).swatch(accent).on(same));
+    }
+    let save = items.len();
+    items.push(fly::MItem::new(t!("Сохранить текущий вид как шаблон", "Save the current look as a template")).sep());
+    if !list.is_empty() {
+        items.push(fly::MItem::new(t!("Удалить шаблон…", "Delete a template…")).danger());
+    }
+    gear_page("\u{E8F1}", t!("Шаблоны", "Templates"), t!("Свои наборы на любое настроение", "Your own looks for any mood"), items, move |i| {
+        let mut list = list;
+        if i == 0 {
+            return style_menu();
+        } else if (first..save).contains(&i) {
+            list[i - first].apply();
+            bars::place_all();
+        } else if i == save {
+            let name = |n: usize| tf!("Шаблон {}", "Template {}", "Modelo {}", n);
+            let n = (1..).find(|&n| !list.iter().any(|t| t.name == name(n))).unwrap_or(1);
+            list.push(Theme::current(&name(n)));
+            i18n::style::save_themes(&list);
+        } else {
+            return delete_page();
+        }
+        templates_page();
+    });
+}
+
+unsafe fn delete_page() {
+    let list = i18n::style::themes();
+    let mut items = vec![back()];
+    for (k, th) in list.iter().enumerate() {
+        let it = fly::MItem::new(th.name.clone()).hint(style_name(th.style)).danger();
+        items.push(if k == 0 { it.sep() } else { it });
+    }
+    gear_page("\u{E74D}", t!("Удалить шаблон", "Delete a template"), t!("Нажмите на шаблон, чтобы удалить", "Click a template to delete it"), items, move |i| {
+        let mut list = list;
+        if i == 0 || i > list.len() {
+            return templates_page();
+        }
+        list.remove(i - 1);
+        i18n::style::save_themes(&list);
+        if list.is_empty() { templates_page() } else { delete_page() }
+    });
+}
+
+unsafe fn reset_page() {
+    let items = vec![fly::MItem::new(t!("Да, сбросить", "Yes, reset")).danger(), fly::MItem::new(t!("Отмена", "Cancel"))];
+    gear_page("\u{E777}", t!("Сбросить всё?", "Reset everything?"), t!("Тема, цвета, панель. Шаблоны останутся", "Theme, colors, bar. Templates stay"), items, |i| {
+        if i == 0 {
+            i18n::style::reset_all();
+            bars::place_all();
+        }
+        style_menu();
     });
 }
 
@@ -2686,7 +2976,7 @@ unsafe fn start_menu() {
                 let wt = std::env::var_os("LOCALAPPDATA").map(|b| PathBuf::from(b).join(r"Microsoft\WindowsApps\wt.exe")).filter(|p| p.is_file());
                 open(&wide(if wt.is_some() { "wt.exe" } else { "powershell.exe" }));
             }
-            "!run" => quiet(Command::new("rundll32.exe").args(["shell32.dll,#61"])),
+            "!run" => run_box(),
             "!desktop" => winrust_common::desktop::toggle(),
             "!lock" => quiet(Command::new("rundll32.exe").args(["user32.dll,LockWorkStation"])),
             "!sleep" => fly::sleep_now(),
@@ -2698,6 +2988,53 @@ unsafe fn start_menu() {
 }
 
 /// Puts the open, not minimized windows side by side in the work area.
+/// A window dropped with the pointer on the screen edge snaps (Windows 11 style): left / right edge = that half of the monitor's
+/// work area, top edge = maximized. Only resizable windows; without Explorer nothing else does this.
+unsafe extern "system" fn snap_proc(_: windows_sys::Win32::UI::Accessibility::HWINEVENTHOOK, _: u32, w: HWND, id: i32, _: i32, _: u32, _: u32) {
+    if id != 0 || w.is_null() || IsWindowVisible(w) == 0 || GetWindowLongW(w, GWL_STYLE) as u32 & WS_THICKFRAME == 0 || IsZoomed(w) != 0 {
+        return;
+    }
+    let mut pt: POINT = zeroed();
+    GetCursorPos(&mut pt);
+    let mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+    let mut mi: MONITORINFO = zeroed();
+    mi.cbSize = size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(mon, &mut mi) == 0 {
+        return;
+    }
+    let (m, a) = (mi.rcMonitor, mi.rcWork);
+    let half = (a.right - a.left) / 2;
+    if pt.y <= m.top + 1 {
+        ShowWindow(w, SW_MAXIMIZE);
+    } else if pt.x <= m.left + 1 {
+        SetWindowPos(w, null_mut(), a.left, a.top, half, a.bottom - a.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    } else if pt.x >= m.right - 2 {
+        SetWindowPos(w, null_mut(), a.left + half, a.top, half, a.bottom - a.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+/// Win+1..9: opens the n-th app button's pin, or brings its window up (a second press on the only window minimizes it,
+/// with several windows each press moves on to the next one).
+unsafe fn win_num(n: usize) {
+    let Some((wins, pin)) = BTNS.with_borrow(|b| b.get(n + 1).map(|b| (b.wins.clone(), b.pin))) else { return };
+    if wins.is_empty() {
+        if let Some(l) = pin.and_then(|p| PINS.with_borrow(|p2| p2.get(p).map(|x| x.lnk.clone()))) {
+            open(&l);
+        }
+        return;
+    }
+    let i = wins.iter().position(|&w| w == GetForegroundWindow());
+    let w = i.map_or(wins[0], |i| wins[(i + 1) % wins.len()]);
+    if wins.len() == 1 && i.is_some() {
+        ShowWindow(w, SW_MINIMIZE);
+    } else {
+        if IsIconic(w) != 0 {
+            ShowWindow(w, SW_RESTORE);
+        }
+        force_fg(w);
+    }
+}
+
 unsafe fn tile_windows() {
     let wins: Vec<HWND> = BTNS.with_borrow(|b| b.iter().flat_map(|b| b.wins.iter().copied()).filter(|&w| IsIconic(w) == 0).collect());
     if wins.is_empty() {
@@ -2872,6 +3209,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WIN_START => fly::toggle(fly::Kind::Start),
         LANG_CYCLE => next_lang(hwnd, wp != 0),
         ALT_TAB => alt_tab(wp == 1),
+        WIN_NUM => win_num(wp),
         ALT_UP => alt_done(wp == 1),
         SNIP if wp == 1 => screenshot_notice(hwnd),
         SNIP if wp == 2 => clip_notice(hwnd),
@@ -3036,7 +3374,7 @@ fn main() {
         let class = wide("topbar");
         let wc = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: hi, hCursor: LoadCursorW(null_mut(), IDC_ARROW), lpszClassName: class.as_ptr(), ..zeroed() };
         RegisterClassW(&wc);
-        let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, class.as_ptr(), class.as_ptr(), WS_POPUP, 0, 0, GetSystemMetrics(SM_CXSCREEN), bar_h(), null_mut(), null_mut(), hi, null());
+        let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED, class.as_ptr(), class.as_ptr(), WS_POPUP, 0, 0, GetSystemMetrics(SM_CXSCREEN), bar_h(), null_mut(), null_mut(), hi, null());
         // Our own Shell_TrayWnd (hidden, topmost, so apps find it before explorer's): apps register their tray icons here.
         let tc = wide("Shell_TrayWnd");
         RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(tray_proc), hInstance: hi, lpszClassName: tc.as_ptr(), ..zeroed() });
@@ -3078,6 +3416,7 @@ fn main() {
         SetTimer(hwnd, 1, 500, None);
         bar_anim(hwnd); // the bar slides in (it starts hidden above the screen)
         SetTimer(hwnd, 3, 250, None); // fullscreen watch
+        windows_sys::Win32::UI::Accessibility::SetWinEventHook(0x000B, 0x000B, null_mut(), Some(snap_proc), 0, 0, 0); // EVENT_SYSTEM_MOVESIZEEND
         thread::spawn(|| {
             if !SetWindowsHookExW(WH_KEYBOARD_LL, Some(kb_hook), GetModuleHandleW(null()), 0).is_null() {
                 let mut m: MSG = zeroed();

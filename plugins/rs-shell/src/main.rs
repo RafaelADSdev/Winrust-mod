@@ -32,11 +32,28 @@ fn reg(args: &[&str]) -> Option<String> {
 
 /// Commands from `reg query <Run key>` output: "    Name    REG_SZ    command line".
 fn parse_run(out: &str) -> Vec<String> {
+    parse_run_named(out).into_iter().map(|(_, c)| c).collect()
+}
+
+/// (value name, command) pairs from `reg query <Run key>` output.
+fn parse_run_named(out: &str) -> Vec<(String, String)> {
     out.lines().filter_map(|l| {
-        let (_, v) = l.split_once("REG_EXPAND_SZ").or_else(|| l.split_once("REG_SZ"))?;
-        Some(v.trim().to_string()).filter(|v| !v.is_empty())
+        let (n, v) = l.split_once("    REG_EXPAND_SZ").or_else(|| l.split_once("    REG_SZ"))?;
+        Some((n.trim().to_string(), v.trim().to_string())).filter(|(_, v)| !v.is_empty())
     }).collect()
 }
+
+/// Names (lowercase) the user turned off in Task Manager's Startup tab: under StartupApproved each entry is a
+/// REG_BINARY whose first byte is even when enabled (02, 06) and odd when disabled (03, 07). Explorer skips those.
+fn parse_disabled(out: &str) -> std::collections::HashSet<String> {
+    out.lines().filter_map(|l| {
+        let (n, v) = l.split_once("    REG_BINARY")?;
+        let first = u8::from_str_radix(v.trim().get(..2)?, 16).ok()?;
+        (first & 1 == 1).then(|| n.trim().to_lowercase())
+    }).collect()
+}
+
+const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved";
 
 /// The exe a Run command line points at, %VARS% expanded; None when it is not an .exe we can tell apart (scripts, URIs).
 fn exe_path(cmd: &str) -> Option<String> {
@@ -56,16 +73,33 @@ fn exe_path(cmd: &str) -> Option<String> {
 /// Everything the shell should start at logon (commands for `cmd /c start ""`).
 fn autostart() -> Vec<String> {
     let mut v = vec![];
-    for key in [r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run"] {
-        v.extend(reg(&["query", key]).map(|o| parse_run(&o)).unwrap_or_default());
+    let off = |key: String| reg(&["query", &key]).map(|o| parse_disabled(&o)).unwrap_or_default();
+    // each Run key with the StartupApproved list Task Manager keeps for it; 32-bit programs register under WOW6432Node
+    let runs = [
+        (r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run", format!(r"HKLM\{APPROVED}\Run")),
+        (r"HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run", format!(r"HKLM\{APPROVED}\Run32")),
+        (r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", format!(r"HKCU\{APPROVED}\Run")),
+    ];
+    for (key, approved) in runs {
+        let disabled = off(approved);
+        v.extend(reg(&["query", key]).map(|o| parse_run_named(&o)).unwrap_or_default().into_iter().filter(|(n, _)| !disabled.contains(&n.to_lowercase())).map(|(_, c)| c));
     }
-    let dirs = [std::env::var("APPDATA").map(|a| PathBuf::from(a).join(r"Microsoft\Windows\Start Menu\Programs\Startup")), std::env::var("ProgramData").map(|a| PathBuf::from(a).join(r"Microsoft\Windows\Start Menu\Programs\StartUp"))];
-    for d in dirs.into_iter().flatten() {
+    let dirs = [
+        (std::env::var("APPDATA").map(|a| PathBuf::from(a).join(r"Microsoft\Windows\Start Menu\Programs\Startup")), format!(r"HKCU\{APPROVED}\StartupFolder")),
+        (std::env::var("ProgramData").map(|a| PathBuf::from(a).join(r"Microsoft\Windows\Start Menu\Programs\StartUp")), format!(r"HKLM\{APPROVED}\StartupFolder")),
+    ];
+    for (d, approved) in dirs {
+        let Ok(d) = d else { continue };
+        let disabled = off(approved); // Startup folder items are listed by file name
         for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
-            if e.file_name().to_string_lossy().eq_ignore_ascii_case("desktop.ini") { continue; }
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            if name == "desktop.ini" || disabled.contains(&name) { continue; }
             v.push(format!("\"{}\"", e.path().display()));
         }
     }
+    // the same program in the 64- and 32-bit keys starts once
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|c| seen.insert(c.to_lowercase()));
     v.retain(|c| !c.to_lowercase().contains("rs-shell")); // never start ourselves twice
     // topbar's own helper (reshell) is started from our folder below, not from the Run entry that points into Program Files
     v.retain(|c| !c.to_lowercase().contains(r"\topbar\"));
@@ -243,8 +277,37 @@ fn startup_run() -> bool {
     ["RunStuffHasBeenRun", "StartupHasBeenRun"].iter().all(|n| reg(&["query", &format!(r"{k}\{n}")]).is_some())
 }
 
-fn may_end_explorer(markers: bool, since_start: Duration) -> bool {
-    markers || since_start >= AUTOSTART_GRACE
+/// What Explorer's autostart should leave running: the exe names (lowercase) of the entries we can recognise, and how many
+/// we cannot (Startup folder shortcuts, scripts, URIs).
+fn expected_autostart(list: &[String]) -> (Vec<String>, usize) {
+    let exes: Vec<String> = list
+        .iter()
+        .filter_map(|c| {
+            // Squirrel apps (Discord, Slack...) autostart as `Update.exe --processStart "App.exe"`: Update.exe quits at once,
+            // the app is what keeps running
+            let lc = c.to_lowercase();
+            if let Some(i) = lc.find("--processstart") {
+                let app = c[i + "--processstart".len()..].trim_start().trim_start_matches('"');
+                return app.split(['"', ' ']).next().filter(|a| a.to_lowercase().ends_with(".exe")).map(str::to_lowercase);
+            }
+            exe_path(c).and_then(|p| std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().to_lowercase()))
+        })
+        .collect();
+    let untracked = list.len() - exes.len();
+    (exes, untracked)
+}
+
+/// The expected exes that are not running yet.
+fn missing_autostart<'a>(expected: &'a [String], running: &[(u32, String)]) -> Vec<&'a str> {
+    expected.iter().filter(|e| !running.iter().any(|(_, n)| n.eq_ignore_ascii_case(e))).map(String::as_str).collect()
+}
+
+/// Explorer may go once it has started the autostart: its markers say so (older builds), or every program we expect is
+/// running and Explorer had its startup delay (~10 s; 30 s when there are entries we cannot watch, such as Startup
+/// folder shortcuts, which it runs in the same pass), or the grace time ran out (an app that starts and quits at once).
+fn may_end_explorer(markers: bool, since_start: Duration, all_running: bool, untracked: usize) -> bool {
+    let settle = Duration::from_secs(if untracked > 0 { 30 } else { 15 });
+    markers || since_start >= AUTOSTART_GRACE || (all_running && since_start >= settle)
 }
 
 /// Gives the user Explorer back (with a normal, not elevated, token: the shell must never run elevated).
@@ -281,13 +344,17 @@ fn overlay() {
 fn overlay_watch(replace: bool, desktop: PathBuf, up: impl Fn() -> bool) {
     let (mut starts, mut misses, mut dmiss, mut stable, mut killed) = (0, 0, 0, 0, false);
     let began = Instant::now();
+    // newer builds write no markers: watch for the autostart programs themselves instead of always waiting the full grace
+    let (expected, untracked) = if replace { expected_autostart(&autostart()) } else { (vec![], 0) };
+    if replace { log(&format!("autostart to wait for: {} exe(s) {:?}, {} other entr(ies)", expected.len(), expected, untracked)); }
     loop {
         thread::sleep(Duration::from_secs(3));
         if replace && !killed {
             // both our surfaces must be on screen before the system's one goes away
             stable = if bar_up() && up() { stable + 1 } else { 0 };
-            if stable >= 3 && may_end_explorer(startup_run(), began.elapsed()) {
-                log(&format!("autostart done (markers: {}, after {} s)", startup_run(), began.elapsed().as_secs()));
+            let missing = missing_autostart(&expected, &winrust_common::proc::list());
+            if stable >= 3 && may_end_explorer(startup_run(), began.elapsed(), missing.is_empty(), untracked) {
+                log(&format!("autostart done (markers: {}, after {} s, not running: {:?})", startup_run(), began.elapsed().as_secs(), missing));
                 kill_shell_explorer();
                 killed = true;
             }
@@ -385,9 +452,27 @@ mod tests {
     }
     #[test]
     fn ends_explorer_on_markers_or_after_grace() {
-        assert!(may_end_explorer(true, Duration::ZERO));
-        assert!(!may_end_explorer(false, Duration::from_secs(30)));
-        assert!(may_end_explorer(false, Duration::from_secs(90)));
+        let s = Duration::from_secs;
+        assert!(may_end_explorer(true, Duration::ZERO, false, 0));
+        assert!(!may_end_explorer(false, s(30), false, 0)); // something still missing
+        assert!(may_end_explorer(false, s(90), false, 3)); // grace over, whatever is missing
+        // everything we watch is running: after Explorer's startup delay, longer with shortcuts we cannot watch
+        assert!(!may_end_explorer(false, s(9), true, 0));
+        assert!(may_end_explorer(false, s(15), true, 0));
+        assert!(!may_end_explorer(false, s(20), true, 1));
+        assert!(may_end_explorer(false, s(30), true, 1));
+    }
+    #[test]
+    fn watches_the_autostart_exes() {
+        let list = [r#""C:\a b\Steam.exe" -silent"#.to_string(), r"C:\d\y.exe /background".to_string(), r#""C:\Users\u\Startup\x.lnk""#.to_string()];
+        let (exes, untracked) = super::expected_autostart(&list);
+        assert_eq!((exes.clone(), untracked), (vec!["steam.exe".to_string(), "y.exe".to_string()], 1));
+        let running = [(1, "STEAM.EXE".to_string()), (2, "explorer.exe".to_string())];
+        assert_eq!(super::missing_autostart(&exes, &running), ["y.exe"]);
+        assert!(super::missing_autostart(&exes, &[(1, "steam.exe".into()), (3, "y.exe".into())]).is_empty());
+        // Squirrel: the app it starts, not Update.exe
+        let sq = [r#"C:\Users\u\AppData\Local\Discord\Update.exe --processStart Discord.exe"#.to_string(), r#""C:\S\Update.exe" --processStart "slack.exe" --process-start-args "--startup""#.to_string()];
+        assert_eq!(super::expected_autostart(&sq).0, ["discord.exe", "slack.exe"]);
     }
     #[test]
     fn finds_the_exe_in_run_commands() {
@@ -400,5 +485,14 @@ mod tests {
     fn parses_reg_query_lines() {
         let out = "\nHKEY_CURRENT_USER\\X\n    Foo    REG_SZ    foo.exe --x\n    Bar    REG_EXPAND_SZ    %APPDATA%\\bar.exe\n    Empty    REG_SZ    \n";
         assert_eq!(parse_run(out), ["foo.exe --x", "%APPDATA%\\bar.exe"]);
+        // a name with spaces stays whole
+        assert_eq!(super::parse_run_named("    Steam Client    REG_SZ    \"C:\\s\\steam.exe\" -silent\n"), [("Steam Client".to_string(), "\"C:\\s\\steam.exe\" -silent".to_string())]);
+    }
+    #[test]
+    fn reads_task_managers_disabled_entries() {
+        let out = "\nHKEY_CURRENT_USER\\...\\StartupApproved\\Run\n    Discord    REG_BINARY    030000006A1B2C3D4E5F6071\n    OneDrive    REG_BINARY    020000000000000000000000\n    Spotify Web    REG_BINARY    07000000FFFFFFFF00000000\n    Odd    REG_BINARY    06\n    Junk    REG_BINARY    \n";
+        let off = super::parse_disabled(out);
+        assert!(off.contains("discord") && off.contains("spotify web"));
+        assert!(!off.contains("onedrive") && !off.contains("odd") && !off.contains("junk"));
     }
 }

@@ -24,6 +24,8 @@ Para atualizar, execute o instalador mais recente e selecione os componentes des
 
 O idioma padrão é **Português (Brasil)**. Para selecionar outro idioma, abra **Engrenagem → Idioma do WinRust** na barra de tarefas ou use o botão de idioma do instalador. Reabra as outras janelas do WinRust para aplicar a preferência.
 
+Na engrenagem, **Aparência** dá acesso aos temas, às cores e aos modelos salvos. Em **Posição, tamanho e comportamento**, você pode ajustar a barra em todos os monitores e limitar o Alt+Tab ao monitor atual. O **Win+R** abre o modo Executar quando o Explorador do Windows está desativado.
+
 ## Remoção
 
 - **Remover tudo** no instalador restaura a Pesquisa do Windows, a barra de tarefas, o Explorador de Arquivos e as configurações de serviços salvas.
@@ -38,7 +40,7 @@ Ao desinstalar o `rust-explorer`, o WinRust recupera os tipos de inicialização
 |---|---|
 | **rust-search** | Pesquisa arquivos de unidades NTFS com Alt+Espaço. Desativa o serviço de Pesquisa do Windows, bloqueia o `SearchHost.exe` e oculta a caixa de pesquisa da barra padrão. |
 | **rtaskmgr-win32** | Gerenciador de Tarefas aberto por Ctrl+Shift+Esc ou pelo comando `taskmgr.exe`. A instalação preserva o arquivo de sistema e inclui o limpador **rs-du**. A página **Desempenho** oferece ajustes reversíveis, como perfis Jogo e Trabalho, limpeza do cache de memória, bloqueio de processos auxiliares da interface, atualização semanal com `winget`, exclusões do Defender e ajustes de NTFS e do arquivo `hosts`. As páginas **Inicialização** e **O que está lento** mostram programas de inicialização, tempo de drivers e interrupções, janelas travadas, disco e tempo de inicialização do Windows. |
-| **topbar** | Barra de tarefas no estilo Windows 11 com janelas, relógio, volume e menus. Inclui **reshell**, **rs-du** e configurações opcionais no perfil do PowerShell para `zoxide`, `rg`, `eza` e `bat`. Use Win+1/2/3 para alternar áreas de trabalho, Win+D para mostrar a área de trabalho, Win+I para abrir Configurações e Win+E para abrir o Explorador. A engrenagem permite posicionar a barra embaixo ou nas laterais e alinhar os botões à esquerda. |
+| **topbar** | Barra de tarefas com janelas, relógio, volume e menus. Inclui **reshell**, **rs-du** e configurações opcionais no perfil do PowerShell para `zoxide`, `rg`, `eza` e `bat`. Use Win+Ctrl+1/2/3 para alternar áreas de trabalho, Win+1 a Win+9 para acionar os botões de aplicativos da barra, Win+D para mostrar a área de trabalho, Win+I para abrir Configurações e Win+E para abrir o Explorador. A engrenagem permite posicionar a barra embaixo ou nas laterais e alinhar os botões à esquerda. |
 | **rust-explorer** | Explorador de Arquivos com abas e área de trabalho própria. Requer o topbar. Permite cópia de arquivos com progresso, compactação em ZIP e extração de ZIP e 7z. O item **Mostrar na pasta** seleciona o arquivo nas pastas comuns. Botões de voltar e avançar do mouse funcionam. O menu da área de trabalho permite ocultar os ícones. Na instalação inicial, pode ajustar PcaSvc, InventorySvc, lfsvc, cbdhsvc, DoSvc e o agrupamento de processos svchost quando consegue guardar os valores anteriores. |
 | **wiztree** | Mapa do espaço utilizado no disco, acessível pelo atalho **WinRust Disk**. |
 | **photoview** | Visualizador de fotos com navegação por setas e rotação EXIF. Aparece em **Abrir com**. Você pode escolher o aplicativo padrão nas Configurações do Windows. |
@@ -49,7 +51,7 @@ Ao desinstalar o `rust-explorer`, o WinRust recupera os tipos de inicialização
 
 ## Estilos
 
-A engrenagem da barra abre o menu de estilos. A escolha se aplica ao Explorador e à busca.
+Na engrenagem da barra, abra **Aparência** para escolher o estilo. A escolha se aplica ao Explorador e à busca.
 
 | Estilo | Aparência |
 |---|---|

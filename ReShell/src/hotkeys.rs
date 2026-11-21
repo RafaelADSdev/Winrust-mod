@@ -1,5 +1,5 @@
 //! Replacement for desktop-hotkeys.ps1: Win+1/2/3 -> desktop 1/2/3, Win+` -> previous desktop, Win+E -> our file manager,
-//! Win+D -> show desktop, Win+I -> Settings. Win+E/D/I are done here, not left to Explorer: with topbar (and rust-explorer)
+//! (with the topbar running Win+1..9 are its app buttons and the desktops are Win+Ctrl+1..3) Win+D -> show desktop, Win+I -> Settings. Win+E/D/I are done here, not left to Explorer: with topbar (and rust-explorer)
 //! Explorer's taskbar is hidden or gone and it stops answering them although it still holds the hotkeys.
 //! No undocumented COM: the current desktop comes from the registry, switching sends Ctrl+Win+Left/Right
 //! (Win is already held by the user). shortcut: relies on the system shortcuts being enabled.
@@ -90,7 +90,10 @@ unsafe extern "system" fn hook(n: i32, w: WPARAM, l: LPARAM) -> LRESULT {
             }
             return 1;
         }
-        let id = match k.vkCode { 0x31..=0x33 => Some(k.vkCode as usize - 0x31), 0xC0 => Some(usize::MAX), _ => None };
+        // with the topbar running Win+1..9 belong to its app buttons (like the Windows taskbar): desktops are Win+Ctrl+1..3 then
+        let bar = unsafe { !FindWindowW(windows_sys::w!("topbar"), std::ptr::null()).is_null() };
+        let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL as i32) as u16 & 0x8000 != 0 };
+        let id = match k.vkCode { 0x31..=0x33 if !bar || ctrl => Some(k.vkCode as usize - 0x31), 0xC0 => Some(usize::MAX), _ => None };
         if let (Some(id), true, false) = (id, win, k.flags & LLKHF_INJECTED != 0) {
             if w == WM_KEYDOWN as usize {
                 // unassigned key tap stops Win release from opening Start; switching runs off the hook thread
@@ -105,7 +108,7 @@ unsafe extern "system" fn hook(n: i32, w: WPARAM, l: LPARAM) -> LRESULT {
 
 pub fn run() -> i32 {
     let h = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook), GetModuleHandleW(std::ptr::null()), 0) };
-    if h.is_null() { eprintln!("{}", winrust_common::pf!("hook failed", "gancho falhou")); return 1 }
+    if h.is_null() { eprintln!("{}", winrust_common::pf!("hook failed", "Não foi possível registrar os atalhos")); return 1 }
     HOOK.store(h as isize, Relaxed);
     let mut m: MSG = unsafe { std::mem::zeroed() };
     while unsafe { GetMessageW(&mut m, std::ptr::null_mut(), 0, 0) } > 0 {}
