@@ -1029,6 +1029,7 @@ mod desk {
     use super::*;
     use std::{cell::Cell, collections::{HashMap, HashSet}};
     use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect, HDC, ScreenToClient};
+    use windows_sys::Win32::UI::HiDpi::{AreDpiAwarenessContextsEqual, GetWindowDpiAwarenessContext};
 
     pub const SPAWN_WORKERW: u32 = 0x052C; // what wallpaper apps send to "Progman" to get a window behind the icons
     const KEY: u32 = 0x0001_0001; // rgb(1, 0, 1): the list's background colour, made see-through while a live wallpaper runs
@@ -1039,6 +1040,7 @@ mod desk {
         static DROP_AT: Cell<Option<(i32, i32)>> = const { Cell::new(None) }; // ...and where it was dropped (screen coords)
         static WORKERW: Cell<isize> = const { Cell::new(0) };
         static LIVE: Cell<bool> = const { Cell::new(false) }; // a live wallpaper is running in WORKERW
+        static WALLPAPER_PARENTS: RefCell<Vec<(HWND, HWND)>> = const { RefCell::new(Vec::new()) };
     }
 
     fn pos_file() -> PathBuf {
@@ -1223,13 +1225,15 @@ mod desk {
         MoveWindow(ST.with_borrow(|st| st.list), pos.x, pos.y, width, height, 1);
     }
 
-    pub unsafe fn spawn_workerw(h: HWND) {
-        if WORKERW.get() != 0 && IsWindow(WORKERW.get() as HWND) != 0 { return; }
+    pub unsafe fn spawn_workerw(h: HWND) -> HWND {
+        let current = WORKERW.get() as HWND;
+        if IsWindow(current) != 0 { return current; }
         let mut r: RECT = std::mem::zeroed();
         GetClientRect(h, &mut r);
         let ww = CreateWindowExW(0, w("WorkerW").as_ptr(), ptr::null(), WS_CHILD | WS_VISIBLE, 0, 0, r.right, r.bottom, h, 0 as _, GetModuleHandleW(ptr::null()), ptr::null());
         SetWindowPos(ww, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); // under the icon list
         WORKERW.set(ww as isize);
+        ww
     }
 
     pub unsafe fn resize_workerw(desktop: HWND) {
@@ -1242,8 +1246,76 @@ mod desk {
         }
     }
 
-    /// Every couple of seconds: a wallpaper window inside WorkerW = live mode on, none = back to the picture.
-    pub unsafe fn check_live(list: HWND) {
+    unsafe fn move_wallpaper(window: HWND, from: HWND, to: HWND) -> bool {
+        if to.is_null() || GetParent(window) != from || IsHungAppWindow(window) != 0 {
+            return false;
+        }
+        // Changing a window's parent across DPI awareness modes can reset the wallpaper process's DPI mode.
+        if AreDpiAwarenessContextsEqual(GetWindowDpiAwarenessContext(from), GetWindowDpiAwarenessContext(to)) == 0 {
+            return false;
+        }
+        let mut bounds: RECT = std::mem::zeroed();
+        if GetWindowRect(window, &mut bounds) == 0 { return false; }
+        let mut origin = POINT { x: bounds.left, y: bounds.top };
+        if ScreenToClient(to, &mut origin) == 0 { return false; }
+
+        let previous = SetParent(window, to);
+        if previous.is_null() { return false; }
+        if SetWindowPos(window, ptr::null_mut(), origin.x, origin.y, bounds.right - bounds.left,
+            bounds.bottom - bounds.top, SWP_NOACTIVATE | SWP_NOZORDER) == 0 {
+            SetParent(window, previous);
+            return false;
+        }
+        true
+    }
+
+    unsafe fn adopt_wallpapers(desktop: HWND, source: HWND) {
+        let mut child = GetWindow(source, GW_CHILD);
+        while !child.is_null() {
+            let next = GetWindow(child, GW_HWNDNEXT); // moving a child changes its siblings
+            let mut class = [0u16; 64];
+            let n = GetClassNameW(child, class.as_mut_ptr(), class.len() as i32) as usize;
+            if String::from_utf16_lossy(&class[..n]).starts_with("WPE") && IsWindowVisible(child) != 0
+                && move_wallpaper(child, source, spawn_workerw(desktop)) {
+                WALLPAPER_PARENTS.with_borrow_mut(|parents| parents.push((child, source)));
+            }
+            child = next;
+        }
+    }
+
+    /// Opening native Windows Settings can bring back Explorer's desktop and Wallpaper Engine can attach to it.
+    /// Move its wallpaper windows behind our icons when Explorer's desktop sits underneath ours.
+    unsafe fn recover_wallpapers(desktop: HWND) {
+        let worker = WORKERW.get() as HWND;
+        WALLPAPER_PARENTS.with_borrow_mut(|parents| {
+            parents.retain(|&(window, _)| !worker.is_null() && GetParent(window) == worker);
+        });
+        let shell = GetShellWindow();
+        if shell.is_null() || shell == desktop { return; }
+        adopt_wallpapers(desktop, shell);
+        let mut host = ptr::null_mut();
+        let worker_class = w("WorkerW");
+        loop {
+            host = FindWindowExW(shell, host, worker_class.as_ptr(), ptr::null());
+            if host.is_null() { break; }
+            adopt_wallpapers(desktop, host);
+        }
+    }
+
+    /// On an orderly restart, leave borrowed wallpapers in the native desktop until the new WinRust desktop is ready.
+    pub unsafe fn return_wallpapers() {
+        let worker = WORKERW.get() as HWND;
+        let shell = GetShellWindow();
+        for (window, parent) in WALLPAPER_PARENTS.with_borrow_mut(std::mem::take) {
+            if !shell.is_null() && (parent == shell || GetParent(parent) == shell) {
+                move_wallpaper(window, worker, parent);
+            }
+        }
+    }
+
+    /// Return to the static picture when the wallpaper app closes or stops drawing.
+    pub unsafe fn check_live(desktop: HWND, list: HWND) {
+        recover_wallpapers(desktop);
         let ww = WORKERW.get() as HWND;
         let live = !ww.is_null() && IsWindow(ww) != 0 && !GetWindow(ww, GW_CHILD).is_null();
         if live == LIVE.replace(live) { return; }
@@ -1261,6 +1333,7 @@ mod desk {
             SetWindowLongPtrW(list, GWL_EXSTYLE, ex & !(WS_EX_LAYERED as isize));
         }
         InvalidateRect(list, ptr::null(), 1);
+        InvalidateRect(desktop, ptr::null(), 1);
     }
 
     /// The desktop's background: the key colour while a live wallpaper shows through, else the picture. false = none to paint.
@@ -1639,7 +1712,8 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
                 0
             }
             desk::SPAWN_WORKERW if desk() => { desk::spawn_workerw(h); 0 }
-            WM_TIMER if desk() && wp == 7 => { desk::check_live(ST.with_borrow(|st| st.list)); 0 }
+            WM_TIMER if desk() && wp == 7 => { desk::check_live(h, ST.with_borrow(|st| st.list)); 0 }
+            WM_CLOSE if desk() => { desk::return_wallpapers(); DefWindowProcW(h, m, wp, lp) }
             WM_DESTROY => { shellwin::revoke(); PostQuitMessage(0); 0 }
             _ => DefWindowProcW(h, m, wp, lp),
         }
