@@ -2032,11 +2032,12 @@ fn main() {
         APP.with_borrow_mut(|a| (a.pages, a.page, a.dpi, a.layout) = (pg, start, dpi, lay));
         refresh_fonts();
         let (inst, class) = (GetModuleHandleW(null()), wide("WinRustSettings"));
-        let wc = WNDCLASSW { style: 0, lpfnWndProc: Some(proc), cbClsExtra: 0, cbWndExtra: 0, hInstance: inst, hIcon: null_mut(), hCursor: LoadCursorW(null_mut(), IDC_ARROW), hbrBackground: null_mut(), lpszMenuName: null(), lpszClassName: class.as_ptr() };
+        let wc = WNDCLASSW { style: 0, lpfnWndProc: Some(proc), cbClsExtra: 0, cbWndExtra: 0, hInstance: inst, hIcon: LoadIconW(inst, 1 as _), hCursor: LoadCursorW(null_mut(), IDC_ARROW), hbrBackground: null_mut(), lpszMenuName: null(), lpszClassName: class.as_ptr() };
         RegisterClassW(&wc);
         let hwnd = CreateWindowExW(0, class.as_ptr(), wide(t!("Параметры", "Settings")).as_ptr(), WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 940 * dpi / 96, 620 * dpi / 96, null_mut(), null_mut(), inst, null());
         frame(hwnd);
         MAIN.store(hwnd as isize, std::sync::atomic::Ordering::Relaxed);
+        winrust_common::desktop::activate_window(hwnd);
         wifi::watch(hwnd);
         goto(hwnd, start); // reads the page fresh and starts what it needs (a Wi-Fi scan, the Bluetooth lists)
         SetTimer(hwnd, 2, 4000, None);

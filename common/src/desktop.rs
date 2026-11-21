@@ -3,10 +3,33 @@
 use std::sync::Mutex;
 use windows_sys::{
     core::BOOL,
-    Win32::{Foundation::{HWND, LPARAM}, Graphics::Dwm::DwmGetWindowAttribute, UI::WindowsAndMessaging::*},
+    Win32::{
+        Foundation::{HWND, LPARAM},
+        Graphics::Dwm::DwmGetWindowAttribute,
+        System::Threading::{AttachThreadInput, GetCurrentThreadId},
+        UI::WindowsAndMessaging::*,
+    },
 };
 
 static HIDDEN: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+
+/// Activates a window after a user action handled by the shell or a keyboard hook.
+pub fn activate_window(window: HWND) {
+    unsafe {
+        if window.is_null() || GetForegroundWindow() == window
+            || (SetForegroundWindow(window) != 0 && GetForegroundWindow() == window)
+        {
+            return;
+        }
+        let me = GetCurrentThreadId();
+        let foreground = GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
+        let joined = foreground != 0 && foreground != me && AttachThreadInput(me, foreground, 1) != 0;
+        SetForegroundWindow(window);
+        if joined {
+            AttachThreadInput(me, foreground, 0);
+        }
+    }
+}
 
 /// Anything open on screen means "minimize": after a window was brought back by hand the old list must not turn the next
 /// press into a silent "restore".

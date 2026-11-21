@@ -21,6 +21,7 @@ use winrust_common as i18n;
 use winrust_common::style::{Style, card, on_accent, pal, rgb, style, ui_face};
 mod clip;
 mod fly;
+mod keyboard;
 mod quick;
 mod switcher;
 use windows::{
@@ -33,7 +34,7 @@ use windows::{
 };
 use windows_sys::Win32::{
     Foundation::*,
-    Globalization::{GetDateFormatW, GetLocaleInfoW, GetTimeFormatW},
+    Globalization::{GetDateFormatW, GetTimeFormatW},
     Graphics::{
         Dwm::DwmGetWindowAttribute,
         Gdi::*,
@@ -48,7 +49,7 @@ use windows_sys::Win32::{
         LibraryLoader::{GetModuleHandleW, GetProcAddress},
         Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS},
         SystemInformation::{GetLocalTime, GetTickCount64},
-        Threading::{AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, TerminateProcess},
+        Threading::{OpenProcess, QueryFullProcessImageNameW, TerminateProcess},
     },
     UI::{Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
 };
@@ -136,6 +137,8 @@ static WIN_ALONE: AtomicBool = AtomicBool::new(false);
 static BAR: AtomicIsize = AtomicIsize::new(0); // the bar window, for the hook thread
 const VOLKEY: u32 = WM_APP + 14; // posted by the keyboard hook: a volume key (wp 0 up, 1 down, 2 mute)
 const SNIP: u32 = WM_APP + 13; // posted by the keyboard hook: PrtSc / Win+Shift+S with no explorer to handle them
+const LANG_CYCLE: u32 = WM_APP + 15;
+static LANG_SPACE_HELD: AtomicBool = AtomicBool::new(false);
 static EXPLORER_UP: AtomicBool = AtomicBool::new(true); // explorer's taskbar exists (it handles PrtSc itself then); refreshed by the bar
 
 struct Pin {
@@ -231,7 +234,6 @@ thread_local! {
     static SH_MSG: Cell<u32> = const { Cell::new(0) }; // "SHELLHOOK": window events for the shell (we are the shell hook window without explorer)
     static EXP_TRAY: Cell<HWND> = const { Cell::new(null_mut()) }; // explorer's taskbar we registered with
     static APP_FG: Cell<HWND> = const { Cell::new(null_mut()) }; // last foreground window that is not ours: the language button acts on it
-    static LANG_TRY: Cell<(u32, usize)> = const { Cell::new((0, 0)) }; // (thread, layout before) of the last switch, checked by timer 7
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -591,7 +593,11 @@ unsafe fn tip_text(h: i32) -> String {
             let n = GetDateFormatW(0x0400, 2, &t, null(), b.as_mut_ptr(), 80).max(1) as usize - 1; // DATE_LONGDATE
             String::from_utf16_lossy(&b[..n])
         }
-        LANG => tf!("Язык ввода: {}", "Input language: {}", "Idioma de entrada: {}", layout_names(layouts().1).0),
+        LANG => {
+            let layout = input_layout();
+            let name = keyboard::variant_name(layout).unwrap_or_else(|| keyboard::locale_name(layout));
+            tf!("Язык ввода: {name}", "Input language: {name}", "Idioma de entrada: {name}")
+        }
         WIFI_I => match net() {
             Link::Wifi(q) => tf!("Wi‑Fi · сигнал {q}%", "Wi‑Fi · signal {q}%", "Wi‑Fi · sinal {q}%"),
             Link::NoInternet(_) => t!("Wi‑Fi подключён, но интернета нет", "Wi‑Fi connected, no internet").into(),
@@ -1627,19 +1633,7 @@ unsafe fn dock_covered() -> bool {
 /// SetForegroundWindow that also works when the request comes from a keyboard hook (we have not "received input" then):
 /// attaching to the foreground thread's input queue lifts the restriction for the moment.
 unsafe fn force_fg(hw: HWND) {
-    // a mouse click on the bar gives us the right to take the foreground: attaching to another thread's input queue while its
-    // button is still down hands the activation back to that window on button-up, and the just-opened flyout closed at once
-    if SetForegroundWindow(hw) != 0 && GetForegroundWindow() == hw {
-        SetFocus(hw);
-        return;
-    }
-    let me = GetCurrentThreadId();
-    let ft = GetWindowThreadProcessId(GetForegroundWindow(), null_mut());
-    let attach = ft != 0 && ft != me && AttachThreadInput(me, ft, 1) != 0;
-    SetForegroundWindow(hw);
-    if attach {
-        AttachThreadInput(me, ft, 0);
-    }
+    winrust_common::desktop::activate_window(hw);
     SetFocus(hw); // detaching drops our thread's keyboard focus; without it the Start search box gets no typing
 }
 
@@ -1648,6 +1642,25 @@ unsafe extern "system" fn kb_hook(n: i32, w: WPARAM, l: LPARAM) -> LRESULT {
     if n >= 0 {
         let k = &*(l as *const KBDLLHOOKSTRUCT);
         let down0 = w == WM_KEYDOWN as usize || w == WM_SYSKEYDOWN as usize;
+        let held = |vk: u16| GetAsyncKeyState(vk as i32) < 0;
+        if k.vkCode == VK_SPACE as u32 {
+            if !down0 && LANG_SPACE_HELD.swap(false, Relaxed) {
+                return 1;
+            }
+            if down0 && LANG_SPACE_HELD.load(Relaxed) {
+                return 1;
+            }
+            // We own the keyboard picker even when Explorer has been started for a Settings page.
+            if down0 && (held(VK_LWIN) || held(VK_RWIN)) && !held(VK_CONTROL) && !held(VK_MENU)
+            {
+                let backwards = held(VK_SHIFT);
+                LANG_SPACE_HELD.store(true, Relaxed);
+                WIN_ALONE.store(false, Relaxed);
+                keys(&[0xE8]); // the shell must not see the remaining Win press as Win alone
+                PostMessageW(BAR.load(Relaxed) as HWND, LANG_CYCLE, backwards as usize, 0);
+                return 1;
+            }
+        }
         // without explorer nobody handles the volume keys, and Surface's power + volume-up arrives as an injected Win+PrtSc
         // (the injected events are skipped below, so these two are taken before that check)
         if !EXPLORER_UP.load(Relaxed) {
@@ -1668,7 +1681,6 @@ unsafe extern "system" fn kb_hook(n: i32, w: WPARAM, l: LPARAM) -> LRESULT {
         if k.flags & LLKHF_INJECTED == 0 {
             // Win+Shift+S is our own region clipper (also under Explorer); without explorer nobody opens the screen
             // capture either: PrtSc (when Windows is set to snip with it; otherwise it copies the screen by itself) does it here
-            let held = |vk: u16| GetAsyncKeyState(vk as i32) < 0;
             let snip_key = !EXPLORER_UP.load(Relaxed) && k.vkCode == VK_SNAPSHOT as u32;
             let win_shift_s = k.vkCode == b'S' as u32 && down0 && (held(VK_LWIN) || held(VK_RWIN)) && held(VK_SHIFT);
             if snip_key || win_shift_s {
@@ -1866,68 +1878,62 @@ unsafe fn screenshot_notice(bar: HWND) {
 
 /// Next keyboard layout for the app window. Posted to its focused control (that is where Chrome, Office... look for it);
 /// timer 7 checks it took and otherwise presses Win+Space, the system switcher (games, terminals ignore the message).
-/// The installed keyboard layouts and the one the app in front uses.
-unsafe fn layouts() -> (Vec<HKL>, HKL) {
-    let mut l: [HKL; 32] = [null_mut(); 32];
-    let n = GetKeyboardLayoutList(32, l.as_mut_ptr()).clamp(0, 32) as usize;
-    (l[..n].to_vec(), GetKeyboardLayout(GetWindowThreadProcessId(app_window(), null_mut())))
-}
-
-/// A layout's language as Windows names it in the user's language ("Русский (Россия)"), and its short code ("RUS").
-unsafe fn layout_names(k: HKL) -> (String, String) {
-    let id = k as usize as u32 & 0xffff;
-    let get = |what: u32| {
-        let mut b = [0u16; 96];
-        let n = GetLocaleInfoW(id, what, b.as_mut_ptr(), 96).max(1) as usize - 1;
-        String::from_utf16_lossy(&b[..n])
-    };
-    let short = get(3).to_uppercase(); // LOCALE_SABBREVLANGNAME
-    (get(2), if short == "ENU" { "ENG".into() } else { short }) // LOCALE_SLOCALIZEDDISPLAYNAME
-}
-
 /// The input language picker above the language button.
 unsafe fn lang_menu(bar: HWND) {
-    let (list, cur) = layouts();
+    let target = keyboard::Target::new(app_window());
+    let cur = target.map_or(null_mut(), |target| target.current());
+    let list = keyboard::loaded();
     let mut items: Vec<fly::MItem> = list.iter().map(|&k| {
-        let (name, short) = layout_names(k);
-        fly::MItem::new(name).on(k == cur).hint(Box::leak(short.into_boxed_str())) // a handful of short strings, kept for the bar's lifetime
+        let mut label = keyboard::locale_name(k);
+        let mut hint = keyboard::short_name(k);
+        let id = keyboard::locale_id(k);
+        if list.iter().any(|&other| other != k && keyboard::locale_id(other) == id) {
+            if let Some(variant) = keyboard::variant_name(k) {
+                match variant.split(|c: char| !c.is_ascii_alphanumeric()).find(|&s| matches!(s, "ABNT" | "ABNT2")) {
+                    Some(abnt) if id == 0x0416 => hint = abnt.to_owned(),
+                    _ => label = variant,
+                }
+            }
+        }
+        fly::MItem::new(label).on(k == cur).hint(hint)
     }).collect();
     items.push(fly::MItem::new(t!("Языковые параметры", "Language settings")).sep());
     let head = (null_mut(), "\u{E775}", t!("Язык ввода", "Input language").to_string(), t!("Win+Пробел — следующий", "Win+Space — next one").to_string());
     fly::menu(tip_cx(&bar_layout(bar), LANG), Some(head), items, move |i| match list.get(i) {
-        Some(&k) => set_lang(bar, k),
+        Some(&k) => {
+            if let Some(target) = target {
+                keyboard::select(bar, target, k);
+            }
+            fly::close_now();
+        }
         None => open(&wide("ms-settings:regionlanguage")),
     });
 }
 
-unsafe fn next_lang(bar: HWND) {
-    let (l, cur) = layouts();
-    if l.len() < 2 {
+unsafe fn next_lang(bar: HWND, backwards: bool) {
+    let Some(target) = keyboard::Target::new(app_window()) else { return };
+    let list = keyboard::loaded();
+    let count = list.len();
+    if count < 2 {
         return; // one layout: nothing to switch to
     }
-    set_lang(bar, l[l.iter().position(|&k| k == cur).map_or(0, |i| i + 1) % l.len()]);
-}
-
-/// Asks the app in front to switch to layout `next` (the bar's own thread cannot change another app's language).
-unsafe fn set_lang(bar: HWND, next: HKL) {
-    let w = app_window();
-    let tid = GetWindowThreadProcessId(w, null_mut());
-    let cur = GetKeyboardLayout(tid);
-    let mut gi: GUITHREADINFO = zeroed();
-    gi.cbSize = size_of::<GUITHREADINFO>() as u32;
-    let target = if GetGUIThreadInfo(tid, &mut gi) != 0 && !gi.hwndFocus.is_null() { gi.hwndFocus } else { w };
-    PostMessageW(target, WM_INPUTLANGCHANGEREQUEST, 0, next as isize);
-    LANG_TRY.set((tid, cur as usize));
-    SetTimer(bar, 7, 250, None);
+    let current = target.current();
+    let index = match (list.iter().position(|&k| k == current), backwards) {
+        (Some(i), false) => (i + 1) % count,
+        (Some(i), true) => (i + count - 1) % count,
+        (None, false) => 0,
+        (None, true) => count - 1,
+    };
+    keyboard::select(bar, target, list[index]);
+    fly::close_now();
 }
 
 unsafe fn lang_name() -> String {
-    let tid = GetWindowThreadProcessId(app_window(), null_mut());
-    let id = GetKeyboardLayout(tid) as usize as u32 & 0xffff;
-    let mut b = [0u16; 16];
-    let n = GetLocaleInfoW(id, 3, b.as_mut_ptr(), 16).max(1) as usize - 1; // LOCALE_SABBREVLANGNAME
-    let s = String::from_utf16_lossy(&b[..n]).to_uppercase();
-    if s == "ENU" { "ENG".into() } else { s }
+    keyboard::short_name(input_layout())
+}
+
+unsafe fn input_layout() -> HKL {
+    keyboard::Target::new(app_window()).map_or_else(|| GetKeyboardLayout(0), |target| target.current())
 }
 
 thread_local! {
@@ -2704,9 +2710,9 @@ unsafe fn click(h: i32, left: bool, mid: bool) {
                 fly::toggle(fly::Kind::Start);
             }
         }
-        // left: the language picker; right: straight to the next one (Win+Space is explorer's, gone under rs-shell)
+        // Left opens the picker, right switches straight to the next layout.
         LANG if left => lang_menu(BAR.load(Relaxed) as HWND),
-        LANG => next_lang(BAR.load(Relaxed) as HWND),
+        LANG => next_lang(BAR.load(Relaxed) as HWND, false),
         WIFI_I => fly::toggle(if left { fly::Kind::Quick } else { fly::Kind::Wifi }), // right click: the network list
         VOL_I | BAT_I => fly::toggle(fly::Kind::Quick),
         CLOCK if left => fly::toggle(fly::Kind::Cal),
@@ -2843,23 +2849,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_TIMER if wp == 6 => hide_tip(hwnd), // the volume readout after a wheel turn
         WM_TIMER if wp == 3 => fs_update(hwnd),
-        WM_TIMER if wp == 7 => {
-            KillTimer(hwnd, 7);
-            let (tid, before) = LANG_TRY.get();
-            if GetKeyboardLayout(tid) as usize == before {
-                let w = app_window();
-                if GetForegroundWindow() != w {
-                    force_fg(w); // Win+Space switches the window in front: put the app back there first
-                }
-                keys(&[VK_LWIN, VK_SPACE]); // the app ignored the request: the system switcher always works (with explorer)
-            }
-            InvalidateRect(hwnd, null(), 0); // the label shows the new language right away
-        }
+        WM_TIMER if wp == keyboard::RETRY_TIMER => keyboard::retry(hwnd),
         WM_TIMER if wp == 4 => {
             InvalidateRect(hwnd, null(), 0);
         }
         WM_TIMER if wp == 5 => bar_step(hwnd),
         WIN_START => fly::toggle(fly::Kind::Start),
+        LANG_CYCLE => next_lang(hwnd, wp != 0),
         ALT_TAB => alt_tab(wp == 1),
         ALT_UP => alt_done(wp == 1),
         SNIP if wp == 1 => screenshot_notice(hwnd),

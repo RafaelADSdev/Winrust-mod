@@ -712,7 +712,7 @@ pub fn init(hi: HINSTANCE) {
 pub struct MItem {
     pub icon: HICON,
     pub label: String,
-    pub hint: &'static str,
+    pub hint: String,
     pub on: bool,
     pub danger: bool,
     pub sep: bool,
@@ -720,10 +720,10 @@ pub struct MItem {
 
 impl MItem {
     pub fn new(label: impl Into<String>) -> Self {
-        MItem { icon: null_mut(), label: label.into(), hint: "", on: false, danger: false, sep: false }
+        MItem { icon: null_mut(), label: label.into(), hint: String::new(), on: false, danger: false, sep: false }
     }
-    pub fn hint(mut self, h: &'static str) -> Self {
-        self.hint = h;
+    pub fn hint(mut self, h: impl Into<String>) -> Self {
+        self.hint = h.into();
         self
     }
     pub fn on(mut self, on: bool) -> Self {
@@ -1569,11 +1569,14 @@ unsafe fn paint(hw: HWND, k: Kind) {
                         rx -= sc(18);
                     }
                     SelectObject(dc, f_small);
-                    if !it.hint.is_empty() {
-                        text(dc, it.hint, RECT { left: lx, right: rx, ..*rc }, mix(pal().dim, pal().bg, 0.25), DT_RIGHT);
-                    }
+                    let hint_width = if it.hint.is_empty() { 0 } else {
+                        let mut measured = RECT::default();
+                        DrawTextW(dc, wide(&it.hint).as_ptr(), -1, &mut measured, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+                        text(dc, &it.hint, RECT { left: lx, right: rx, ..*rc }, mix(pal().dim, pal().bg, 0.25), DT_RIGHT);
+                        measured.right + sc(14)
+                    };
                     SelectObject(dc, f_txt);
-                    text(dc, &it.label, RECT { left: lx, right: rx - if it.hint.is_empty() { 0 } else { sc(96) }, ..*rc }, if it.on { pal().accent } else { col }, DT_LEFT);
+                    text(dc, &it.label, RECT { left: lx, right: rx - hint_width, ..*rc }, if it.on { pal().accent } else { col }, DT_LEFT);
                 }
             });
         }
