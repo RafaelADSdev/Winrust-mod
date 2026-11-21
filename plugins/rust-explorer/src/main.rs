@@ -1032,6 +1032,7 @@ mod desk {
 
     pub const SPAWN_WORKERW: u32 = 0x052C; // what wallpaper apps send to "Progman" to get a window behind the icons
     const KEY: u32 = 0x0001_0001; // rgb(1, 0, 1): the list's background colour, made see-through while a live wallpaper runs
+    const LIVE_LABEL_BG: isize = 0x0022_1E1B; // rgb(27, 30, 34)
 
     thread_local! {
         static DRAG_FROM: Cell<Option<(i32, i32)>> = const { Cell::new(None) }; // our own icon drag: where it started (list coords)
@@ -1246,8 +1247,12 @@ mod desk {
         let ww = WORKERW.get() as HWND;
         let live = !ww.is_null() && IsWindow(ww) != 0 && !GetWindow(ww, GW_CHILD).is_null();
         if live == LIVE.replace(live) { return; }
-        // the list stays "transparent" (its background is what the desktop paints: the key colour while live, see erase()),
-        // so it keeps drawing the label shadows; the colour key then cuts the background out
+        // The colour key removes only exact matches. Shadows and antialiased edges blended
+        // against it leave dark fringes on bright wallpapers. Give live labels a solid
+        // surface to blend against and keep the rest of the icon list transparent.
+        let shadow = LVS_EX_TRANSPARENTSHADOWTEXT;
+        put(list, LVM_SETEXTENDEDLISTVIEWSTYLE, shadow as usize, if live { 0 } else { shadow as isize });
+        put(list, LVM_SETTEXTBKCOLOR, 0, if live { LIVE_LABEL_BG } else { CLR_NONE });
         let ex = GetWindowLongPtrW(list, GWL_EXSTYLE);
         if live {
             SetWindowLongPtrW(list, GWL_EXSTYLE, ex | WS_EX_LAYERED as isize);
@@ -1356,12 +1361,12 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
                     put(list, LVM_SETIMAGELIST, LVSIL_NORMAL as usize, big as isize);
                     put(list, LVM_SETICONSPACING, 0, ((ui::sc(96) as isize) << 16) | ui::sc(88) as isize);
                     // transparent background (the desktop paints it) and shadowed labels, readable on light wallpapers too
-                    let ex = LVS_EX_TRANSPARENTBKGND | 0x0080_0000; // LVS_EX_TRANSPARENTSHADOWTEXT
+                    let ex = LVS_EX_TRANSPARENTBKGND | LVS_EX_TRANSPARENTSHADOWTEXT;
                     put(list, LVM_SETEXTENDEDLISTVIEWSTYLE, ex as usize, ex as isize);
                     for msg in [LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR] { put(list, msg, 0, CLR_NONE); }
                     put(list, LVM_SETTEXTCOLOR, 0, 0x00FF_FFFF);
                     wall::refresh(desk::bounds());
-                    // grey (not ClearType) smoothing: on a live wallpaper the labels sit on a colour key, where ClearType leaves coloured fringes
+                    // Grayscale smoothing keeps small label edges neutral on both backdrops.
                     put(list, WM_SETFONT, windows_sys::Win32::Graphics::Gdi::CreateFontW(-ui::sc(13), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 4, 0, w(ui::ui_face()).as_ptr()) as usize, 1);
                     // like explorer's desktop: wallpaper apps look for a SHELLDLL_DefView under Progman
                     CreateWindowExW(0, w("SHELLDLL_DefView").as_ptr(), ptr::null(), WS_CHILD, 0, 0, 0, 0, h, 0 as _, inst, ptr::null());
