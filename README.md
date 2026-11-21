@@ -12,7 +12,7 @@ English | [Русский](README.ru.md) | [Português (Brasil)](README.pt-BR.md
 
 ## Install
 
-1. Download `WinRust.exe` from the [latest release](https://github.com/Lemxy/WinRust/releases/latest) (Windows 10/11, x64).
+1. Download `WinRust.exe` from the [latest WinRust Mod release](https://github.com/RafaelADSdev/Winrust-mod/releases/latest) (Windows 10/11, x64).
 2. Run it as administrator.
 3. Tick the components you want and press the install button. On a fresh install, `rust-explorer` is unchecked. Tick it to replace the Windows Explorer shell (or use the gear on the topbar row: the **Shell: rust-explorer** switch). They are installed in the right order; one that fails or is skipped does not stop the others, the window lists what went wrong.
 

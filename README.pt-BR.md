@@ -12,7 +12,7 @@ O WinRust reúne programas nativos em Rust que substituem a barra de tarefas, o 
 
 ## Instalação
 
-1. Baixe o instalador para Windows 10 ou 11 de 64 bits. As versões oficiais estão na [página de lançamentos](https://github.com/Lemxy/WinRust/releases).
+1. Baixe o `WinRust.exe` para Windows 10 ou 11 de 64 bits no [lançamento mais recente do WinRust Mod](https://github.com/RafaelADSdev/Winrust-mod/releases/latest).
 2. Execute o instalador como administrador.
 3. Selecione os componentes e clique no botão de instalação. Em uma instalação nova, marque **rust-explorer** se quiser substituir o Explorador de Arquivos do Windows. A mesma opção fica na engrenagem da linha do **topbar**. O instalador respeita a ordem das dependências e informa quais componentes falharam ou foram ignorados.
 
