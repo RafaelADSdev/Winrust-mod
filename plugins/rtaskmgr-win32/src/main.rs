@@ -58,9 +58,9 @@ fn net_selftest(out: &str) {
         let all = net::drain();
         net::stop(ses);
         let (rx, tx) = all.get(&me).copied().unwrap_or((0, 0));
-        Ok(tf!("pid={me} принято={rx} отправлено={tx} процессов_в_данных={}", "pid={me} received={rx} sent={tx} processes_in_data={}", all.len()))
+        Ok(tf!("pid={me} принято={rx} отправлено={tx} процессов_в_данных={}", "pid={me} received={rx} sent={tx} processes_in_data={}", "pid={me} recebido={rx} enviado={tx} processos_in_data={}", all.len()))
     })();
-    let _ = std::fs::write(out, report.unwrap_or_else(|e| tf!("ОШИБКА: {e}", "ERROR: {e}")));
+    let _ = std::fs::write(out, report.unwrap_or_else(|e| tf!("ОШИБКА: {e}", "ERROR: {e}", "ERRO: {e}")));
 }
 
 fn xy(l: isize) -> (i32, i32) {

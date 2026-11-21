@@ -340,29 +340,29 @@ fn main() {
         [] => { if !bootstrap() { run_shell(); } 0 }
         ["--overlay"] => { overlay(); 0 }
         ["--dry-run"] => {
-            println!("wallpaper: {:?}", reg(&["query", r"HKCU\Control Panel\Desktop", "/v", "WallPaper"]).map(|o| parse_run(&o)));
-            autostart().iter().for_each(|c| println!("autostart: {c}"));
-            println!("topbar: {} ({})", find_exe("topbar.exe").display(), if find_exe("topbar.exe").exists() { "found" } else { "MISSING" });
-            println!("explorer ran this session's autostart: {}", startup_run());
+            println!("{}", winrust_common::pf!("wallpaper: {:?}", "papel de parede: {:?}", reg(&["query", r"HKCU\Control Panel\Desktop", "/v", "WallPaper"]).map(|o| parse_run(&o))));
+            autostart().iter().for_each(|c| println!("{}", winrust_common::pf!("autostart: {c}", "inicialização automática: {c}")));
+            println!("{}", winrust_common::pf!("topbar: {} ({})", "barra superior: {} ({})", find_exe("topbar.exe").display(), if find_exe("topbar.exe").exists() { winrust_common::pt!("found") } else { winrust_common::pt!("MISSING") }));
+            println!("{}", winrust_common::pf!("explorer ran this session's autostart: {}", "explorer executou a inicialização automática desta sessão: {}", startup_run()));
             0
         }
         ["--enable"] => {
             let exe = std::env::current_exe().unwrap_or_default();
             if !find_exe("topbar.exe").exists() {
-                eprintln!("refusing: topbar.exe is not next to {} (no bar = no way to launch anything)", exe.display());
+                eprintln!("{}", winrust_common::pf!("refusing: topbar.exe is not next to {} (no bar = no way to launch anything)", "recusando: topbar.exe não está próximo a {} (sem barra = não há como lançar nada)", exe.display()));
                 1
             } else if reg(&["add", WINLOGON, "/v", "Shell", "/t", "REG_SZ", "/d", &exe.to_string_lossy(), "/f"]).is_some() {
-                println!("done: you get rs-shell instead of explorer at the next sign-in.\nundo: rs-shell --disable   (or: reg delete \"{WINLOGON}\" /v Shell /f)");
+                println!("{}", winrust_common::pf!("done: you get rs-shell instead of explorer at the next sign-in.\nundo: rs-shell --disable   (or: reg delete \"{WINLOGON}\" /v Shell /f)", "pronto: você obtém rs-shell em vez de explorer no próximo login.\nundo: rs-shell --disable (ou: reg delete \"{WINLOGON}\" /v Shell /f)"));
                 0
-            } else { eprintln!("reg add failed"); 1 }
+            } else { eprintln!("{}", winrust_common::pf!("reg add failed", "falha na adição de registro")); 1 }
         }
         ["--disable"] => {
             // deleting a value that is not there is fine too
             let _ = reg(&["delete", WINLOGON, "/v", "Shell", "/f"]);
-            println!("done: normal shell at the next sign-in");
+            println!("{}", winrust_common::pf!("done: normal shell at the next sign-in", "pronto: shell normal no próximo login"));
             0
         }
-        _ => { eprintln!("usage: rs-shell [--enable | --disable | --dry-run]"); 2 }
+        _ => { eprintln!("{}", winrust_common::pf!("usage: rs-shell [--enable | --disable | --dry-run]", "Uso: rs-shell [--enable | --disable | --dry-run]")); 2 }
     };
     std::process::exit(code);
 }

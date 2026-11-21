@@ -103,20 +103,20 @@ pub fn merge(recs: &mut HashMap<u32, Rec>, id: u32, r: Rec) {
 pub fn scan(drive: char) -> Result<HashMap<u32, Rec>, String> {
     let path: Vec<u16> = format!("\\\\.\\{drive}:").encode_utf16().chain([0]).collect();
     let h = unsafe { CreateFileW(path.as_ptr(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, ptr::null(), OPEN_EXISTING, 0, ptr::null_mut()) };
-    if h == INVALID_HANDLE_VALUE { return Err(format!("cannot open volume {drive}: (run as administrator), error {}", unsafe { GetLastError() })); }
+    if h == INVALID_HANDLE_VALUE { return Err(crate::pf!("cannot open volume {drive}: (run as administrator), error {}", "não é possível abrir o volume {drive}: (executar como administrador), erro {}", unsafe { GetLastError() })); }
     let mut vd: NTFS_VOLUME_DATA_BUFFER = unsafe { std::mem::zeroed() };
     let mut n = 0u32;
     let ok = unsafe { DeviceIoControl(h, FSCTL_GET_NTFS_VOLUME_DATA, ptr::null(), 0, &mut vd as *mut _ as _, size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32, &mut n, ptr::null_mut()) };
-    if ok == 0 { return Err(format!("{drive}: is not NTFS (error {})", unsafe { GetLastError() })); }
+    if ok == 0 { return Err(crate::pf!("{drive}: is not NTFS (error {})", "{drive}: não é NTFS (erro {})", unsafe { GetLastError() })); }
     let (rs, cl) = (vd.BytesPerFileRecordSegment as usize, vd.BytesPerCluster as u64);
     // Record 0 is $MFT itself: its data runs say where the whole table lives, then we read it in big chunks.
     let mut out = vec![0u8; 12 + rs];
     let inp = NTFS_FILE_RECORD_INPUT_BUFFER { FileReferenceNumber: 0 };
     let ok = unsafe { DeviceIoControl(h, FSCTL_GET_NTFS_FILE_RECORD, &inp as *const _ as _, size_of::<NTFS_FILE_RECORD_INPUT_BUFFER>() as u32, out.as_mut_ptr() as _, out.len() as u32, &mut n, ptr::null_mut()) };
-    if ok == 0 { return Err(format!("cannot read the $MFT record, error {}", unsafe { GetLastError() })); }
+    if ok == 0 { return Err(crate::pf!("cannot read the $MFT record, error {}", "não é possível ler o registro $MFT, erro {}", unsafe { GetLastError() })); }
     let rec0 = out[12..12 + rs].to_vec();
     // the ioctl already hands back a record with the fixups undone (raw reads below do not)
-    let runs = data_runs(&rec0).ok_or("no $DATA runs in the $MFT record")?;
+    let runs = data_runs(&rec0).ok_or(crate::pt!("no $DATA runs in the $MFT record"))?;
     let mut left = vd.MftValidDataLength as u64; // bytes of the table still to read
     let mut recs = HashMap::with_capacity(left as usize / rs / 2);
     let (mut idx, mut buf) = (0u32, vec![0u8; 4 << 20]);
@@ -130,7 +130,7 @@ pub fn scan(drive: char) -> Result<HashMap<u32, Rec>, String> {
             let want = len.min(buf.len() as u64) as usize;
             let mut got = 0u32;
             let ok = unsafe { SetFilePointerEx(h, pos, ptr::null_mut(), FILE_BEGIN) != 0 && ReadFile(h, buf.as_mut_ptr() as _, want as u32, &mut got, ptr::null_mut()) != 0 };
-            if !ok || got as usize != want { return Err(format!("reading the MFT failed at byte {pos}, error {}", unsafe { GetLastError() })); }
+            if !ok || got as usize != want { return Err(crate::pf!("reading the MFT failed at byte {pos}, error {}", "a leitura do MFT falhou no byte {pos}, erro {}", unsafe { GetLastError() })); }
             for c in buf[..want].chunks_exact_mut(rs) {
                 seen += 1;
                 magic += (&c[..4] == b"FILE") as u32;
@@ -143,7 +143,7 @@ pub fn scan(drive: char) -> Result<HashMap<u32, Rec>, String> {
     }
     unsafe { CloseHandle(h) };
     recs.retain(|_, r| !r.name.is_empty()); // no $FILE_NAME anywhere (e.g. attribute list in a record we never saw)
-    eprintln!("mft: {seen} slots read, {magic} with FILE magic, {} named", recs.len());
+    eprintln!("{}", crate::pf!("mft: {seen} slots read, {magic} with FILE magic, {} named", "mft: slots {seen} lidos, {magic} com FILE magic, {} nomeado", recs.len()));
     Ok(recs)
 }
 

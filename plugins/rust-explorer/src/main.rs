@@ -93,9 +93,9 @@ fn sort_rows(rows: &mut [Row], col: usize, asc: bool) {
 
 /// Explorer's "Type" column in short form: "File folder", "TXT file", "File".
 fn type_text(name: &str, dir: bool) -> String {
-    if dir { return "File folder".into(); }
+    if dir { return winrust_common::pt!("File folder").into(); }
     let file = name.rsplit('\\').next().unwrap_or(name);
-    match file.rsplit_once('.') { Some((stem, e)) if !stem.is_empty() && !e.is_empty() => format!("{} file", e.to_uppercase()), _ => "File".into() }
+    match file.rsplit_once('.') { Some((stem, e)) if !stem.is_empty() && !e.is_empty() => winrust_common::pf!("{} file", "Arquivo {}", e.to_uppercase()), _ => winrust_common::pt!("File").into() }
 }
 
 /// Explorer shows file sizes in KB; the bigger ones read better in MB / GB.
@@ -167,7 +167,7 @@ const MENU_RENAME: u32 = 0x9004;
 fn in_zip() -> bool { zipx::split_zip(&cur_dir()).is_some() }
 
 fn warn(h: HWND, text: &str) {
-    unsafe { MessageBoxW(h, w(text).as_ptr(), w("WinRust Explorer").as_ptr(), MB_ICONWARNING) };
+    unsafe { MessageBoxW(h, w(text).as_ptr(), w(winrust_common::pt!("WinRust Explorer")).as_ptr(), MB_ICONWARNING) };
 }
 
 /// (archive, archive paths) when every one of `paths` is something inside one and the same .zip.
@@ -226,7 +226,7 @@ unsafe fn activate(h: HWND, p: PathBuf, is_dir: bool) {
 fn zip_menu(h: HWND, paths: &[PathBuf]) {
     let id = unsafe {
         let m = CreatePopupMenu();
-        for (i, t) in [(1usize, "Open"), (2, "Copy"), (3, "Extract here")] { AppendMenuW(m, MF_STRING, i, w(t).as_ptr()); }
+        for (i, t) in [(1usize, winrust_common::pt!("Open")), (2, winrust_common::pt!("Copy")), (3, winrust_common::pt!("Extract here"))] { AppendMenuW(m, MF_STRING, i, w(t).as_ptr()); }
         let mut pt: POINT = std::mem::zeroed();
         GetCursorPos(&mut pt);
         let id = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, h, ptr::null());
@@ -256,13 +256,13 @@ fn zip_menu(h: HWND, paths: &[PathBuf]) {
 /// The shell menu for the selection, with our "Compress to ZIP" / "Extract here" on top.
 fn item_menu(h: HWND, dir: &Path, paths: &[PathBuf]) {
     if zipx::split_zip(dir).is_some() { return zip_menu(h, paths); }
-    let mut extra = vec![(MENU_ZIP, "Compress to ZIP")];
+    let mut extra = vec![(MENU_ZIP, winrust_common::pt!("Compress to ZIP"))];
     if paths.iter().all(|p| p.is_file() && jobs::is_archive(p)) {
-        extra.insert(0, (MENU_EXTRACT, "Extract here"));
+        extra.insert(0, (MENU_EXTRACT, winrust_common::pt!("Extract here")));
     }
     // the shell menu has no Rename here (it needs the shell's own folder view to answer it): the same edit box as F2
-    if paths.len() == 1 { extra.push((MENU_RENAME, "Rename")); }
-    if let [p] = paths { if p.is_dir() { extra.push((MENU_PIN, if ui::pins().contains(p) { "Unpin from Quick access" } else { "Pin to Quick access" })); } }
+    if paths.len() == 1 { extra.push((MENU_RENAME, winrust_common::pt!("Rename"))); }
+    if let [p] = paths { if p.is_dir() { extra.push((MENU_PIN, if ui::pins().contains(p) { winrust_common::pt!("Unpin from Quick access") } else { winrust_common::pt!("Pin to Quick access") })); } }
     let picked = sh::show(h, paths, if jobs::busy() { &[] } else { &extra }).ok().flatten();
     match picked {
         Some(MENU_PIN) => ui::toggle_pin(&paths[0]),
@@ -275,7 +275,7 @@ fn item_menu(h: HWND, dir: &Path, paths: &[PathBuf]) {
             }
         },
         Some(MENU_ZIP) => {
-            let base = if paths.len() == 1 { paths[0].file_stem().unwrap_or_default().to_string_lossy().into_owned() } else { dir.file_name().map_or("Archive".into(), |n| n.to_string_lossy().into_owned()) };
+            let base = if paths.len() == 1 { paths[0].file_stem().unwrap_or_default().to_string_lossy().into_owned() } else { dir.file_name().map_or(winrust_common::pt!("Archive").into(), |n| n.to_string_lossy().into_owned()) };
             let dest = jobs::free_name(dir, &format!("{base}.zip"), false);
             jobs::zip(h as isize, paths.to_vec(), dest);
         }
@@ -298,10 +298,10 @@ fn set_icons_hidden(hide: bool) {
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn bg_menu(h: HWND) {
     let m = CreatePopupMenu();
-    for (id, t) in [(1usize, "New folder"), (2, "New text file"), (3, "Paste"), (4, "Refresh"), (5, "Properties")] { AppendMenuW(m, MF_STRING, id, w(t).as_ptr()); }
+    for (id, t) in [(1usize, winrust_common::pt!("New folder")), (2, winrust_common::pt!("New text file")), (3, winrust_common::pt!("Paste")), (4, winrust_common::pt!("Refresh")), (5, winrust_common::pt!("Properties"))] { AppendMenuW(m, MF_STRING, id, w(t).as_ptr()); }
     let disk = tool("wiztree");
-    if disk.is_some() { AppendMenuW(m, MF_STRING, 6, w("Disk usage (WinRust Disk)").as_ptr()); }
-    if desk() { AppendMenuW(m, MF_STRING, 7, w(if icons_hidden() { "Show desktop icons" } else { "Hide desktop icons" }).as_ptr()); }
+    if disk.is_some() { AppendMenuW(m, MF_STRING, 6, w(winrust_common::pt!("Disk usage (WinRust Disk)")).as_ptr()); }
+    if desk() { AppendMenuW(m, MF_STRING, 7, w(if icons_hidden() { winrust_common::pt!("Show desktop icons") } else { winrust_common::pt!("Hide desktop icons") }).as_ptr()); }
     let mut pt: POINT = std::mem::zeroed();
     GetCursorPos(&mut pt);
     let id = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, h, ptr::null());
@@ -313,8 +313,8 @@ unsafe fn bg_menu(h: HWND) {
             let drive: String = dir.to_string_lossy().chars().take(2).collect();
             if let Some(exe) = disk { let _ = std::process::Command::new(exe).arg(drive).spawn(); }
         }
-        1 => new_entry(&dir, "New folder", true),
-        2 => new_entry(&dir, "New text document.txt", false),
+        1 => new_entry(&dir, winrust_common::pt!("New folder"), true),
+        2 => new_entry(&dir, winrust_common::pt!("New text document.txt"), false),
         3 => paste(h, &dir),
         5 => properties(&dir),
         _ => {}
@@ -494,13 +494,13 @@ fn search(h: HWND, q: &str) {
     if !indexed {
         // no rust-search installed: look through the current folder and below instead
         let (local, cut, flipped) = local_search(&cur_dir(), q);
-        if flipped { more = format!(" for \u{201C}{}\u{201D}", flip_layout(q)); } // typed in the wrong layout: shown what was meant
+        if flipped { more = winrust_common::pf!(" for \u{201C}{}\u{201D}", " para “{}”", flip_layout(q)); } // typed in the wrong layout: shown what was meant
         rows = local;
-        if cut { more += ", stopped early: narrow the search"; }
+        if cut { more += winrust_common::pt!(", stopped early: narrow the search"); }
     }
     let n = rows.len();
-    let where_ = if indexed { "" } else { " in this folder" };
-    let title = if n == 0 { format!("search: {q} - nothing{where_}") } else { format!("search: {q} - {n} hits{where_}{more}") };
+    let where_ = if indexed { "" } else { winrust_common::pt!(" in this folder") };
+    let title = if n == 0 { winrust_common::pf!("search: {q} - nothing{where_}", "pesquisa: {q} - nada{where_}") } else { winrust_common::pf!("search: {q} - {n} hits{where_}{more}", "pesquisa: {q} - {n} hits{where_}{more}") };
     ui::set_search(Some(q.to_string()));
     unsafe { SetWindowTextW(h, w(&title).as_ptr()) };
     let list = ST.with_borrow_mut(|st| { st.rows = rows; st.list });
@@ -1373,7 +1373,7 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
                     let _ = TX.set(sh::start_thumbs(h as isize));
                     ST.with_borrow_mut(|st| st.himl = himl as isize);
                     // the same columns, in the same order, as Explorer's details view
-                    col(list, 0, "Name", ui::sc(360), false); col(list, 1, "Date modified", ui::sc(160), false); col(list, 2, "Type", ui::sc(140), false); col(list, 3, "Size", ui::sc(96), true);
+                    col(list, 0, winrust_common::pt!("Name"), ui::sc(360), false); col(list, 1, winrust_common::pt!("Date modified"), ui::sc(160), false); col(list, 2, winrust_common::pt!("Type"), ui::sc(140), false); col(list, 3, winrust_common::pt!("Size"), ui::sc(96), true);
                     ui::style_list(list);
                 }
                 ST.with_borrow_mut(|st| { st.list = list; st.tab = tab; st.edit = edit; st.tabs = vec![PathBuf::new()]; });
@@ -1553,7 +1553,7 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
                                 return 0;
                             }
                             0x56 if ctrl => paste(h, &dir),
-                            0x4E if ctrl => new_entry(&dir, "New folder", true),
+                            0x4E if ctrl => new_entry(&dir, winrust_common::pt!("New folder"), true),
                             0x48 if ctrl => { SHOW_HIDDEN.fetch_xor(true, Relaxed); } // Ctrl+H: hidden files
                             0x74 => {} // F5: just the reload below
                             0x4D if ctrl => { toggle_view(h); return 0; } // Ctrl+M: details <-> thumbnails
@@ -1590,7 +1590,7 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
                 let err = *Box::from_raw(wp as *mut Option<String>);
                 reload(h);
                 ui::status_dirty(h);
-                if let Some(e) = err { MessageBoxW(h, w(&e).as_ptr(), w("WinRust Explorer").as_ptr(), MB_ICONWARNING); }
+                if let Some(e) = err { MessageBoxW(h, w(&e).as_ptr(), w(winrust_common::pt!("WinRust Explorer")).as_ptr(), MB_ICONWARNING); }
                 0
             }
             WM_NAV => {

@@ -4,7 +4,7 @@
 
 **A Windows shell written in Rust: faster and lighter than the stock one.** Small native programs (no .NET, no Electron) that replace parts of Windows: the taskbar, File Explorer, file search, Task Manager, plus a disk cleaner, a disk map and a photo viewer. One installer puts them in, one button takes them all out.
 
-English | [Русский](README.ru.md)
+English | [Русский](README.ru.md) | [Português (Brasil)](README.pt-BR.md)
 
 <p align="center"><img src="assets/th.jpg" alt="WinRust" width="480"></p>
 
@@ -22,7 +22,7 @@ If UAC asks for **another administrator's** password, the per-user settings (sta
 
 **Update:** download the new `WinRust.exe` from the releases page, run it as administrator and select the components you want to update or install. An existing `rust-explorer` stays selected by default for updates. Your settings and the saved original Windows values stay.
 
-The installer is in English. The **Русский** button in its corner (or "WinRust apps in Русский" in the bar's right-click menu) switches every WinRust program to Russian.
+Use the language button in the top-right corner of the installer, or **WinRust language** in the bar's right-click menu. English, Russian and Brazilian Portuguese are available. Reopen any existing WinRust windows after changing the language.
 
 ## Remove
 

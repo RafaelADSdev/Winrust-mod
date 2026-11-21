@@ -160,7 +160,7 @@ fn is_app(path: &str) -> bool {
 fn labels(path: &str) -> (String, String) {
     let (dir, file) = path.rsplit_once('\\').unwrap_or(("", path));
     if is_app(path) {
-        (file.trim_end_matches(".lnk").trim_end_matches(".LNK").to_string(), "Application".into())
+        (file.trim_end_matches(".lnk").trim_end_matches(".LNK").to_string(), winrust_common::pt!("Application").into())
     } else {
         (file.to_string(), dir.to_string())
     }
@@ -634,7 +634,7 @@ struct MenuSt {
 /// Modal box over the card; `busy` keeps the card from closing when it loses focus to the box.
 unsafe fn ask_box(h: HWND, text: &str, flags: u32) -> i32 {
     st(|s| s.busy = true);
-    let r = MessageBoxW(h, wide(text).as_ptr(), wide("rs launcher").as_ptr(), flags | MB_TOPMOST | MB_SETFOREGROUND);
+    let r = MessageBoxW(h, wide(text).as_ptr(), wide(winrust_common::pt!("rs launcher")).as_ptr(), flags | MB_TOPMOST | MB_SETFOREGROUND);
     st(|s| s.busy = false);
     r
 }
@@ -715,7 +715,7 @@ unsafe fn run_menu(h: HWND, i: usize) {
 /// Rename happens in the input box itself: it shows the current name, Enter applies, Esc cancels.
 unsafe fn begin_rename(h: HWND, p: &str) {
     if protected(p) {
-        ask_box(h, "This is a protected system location.", MB_OK | MB_ICONWARNING);
+        ask_box(h, winrust_common::pt!("This is a protected system location."), MB_OK | MB_ICONWARNING);
         return;
     }
     KillTimer(h, T_DEBOUNCE);
@@ -751,7 +751,7 @@ unsafe fn finish_rename(h: HWND) {
     let dst = format!("{dir}\\{new}");
     if new != cur {
         if let Err(e) = fs::rename(&old, &dst) {
-            ask_box(h, &format!("Cannot rename:\n{e}"), MB_OK | MB_ICONERROR);
+            ask_box(h, &winrust_common::pf!("Cannot rename:\n{e}", "Não é possível renomear: \n{e}"), MB_OK | MB_ICONERROR);
             return;
         }
     }
@@ -767,17 +767,17 @@ fn recycle(p: &str) -> Result<(), String> {
     op.fFlags = (FOF_ALLOWUNDO | FOF_SILENT | FOF_NOERRORUI) as u16;
     let rc = unsafe { SHFileOperationW(&mut op) };
     let aborted = op.fAnyOperationsAborted;
-    if rc != 0 || aborted != 0 { Err(format!("Recycle Bin refused it (code {rc})")) } else { Ok(()) }
+    if rc != 0 || aborted != 0 { Err(winrust_common::pf!("Recycle Bin refused it (code {rc})", "A Lixeira recusou (código {rc})")) } else { Ok(()) }
 }
 
 fn note(text: &str, flags: u32) {
-    unsafe { MessageBoxW(null_mut(), wide(text).as_ptr(), wide("rs launcher").as_ptr(), flags | MB_TOPMOST | MB_SETFOREGROUND) };
+    unsafe { MessageBoxW(null_mut(), wide(text).as_ptr(), wide(winrust_common::pt!("rs launcher")).as_ptr(), flags | MB_TOPMOST | MB_SETFOREGROUND) };
 }
 
 /// Recycle Bin: reversible, no question asked. "Delete forever" opens the purge panel instead.
 unsafe fn remove(h: HWND, p: &str, purge: bool) {
     if protected(p) {
-        ask_box(h, "This is a protected system location.", MB_OK | MB_ICONWARNING);
+        ask_box(h, winrust_common::pt!("This is a protected system location."), MB_OK | MB_ICONWARNING);
         return;
     }
     if purge {
@@ -787,7 +787,7 @@ unsafe fn remove(h: HWND, p: &str, purge: bool) {
     let p = p.to_string();
     std::thread::spawn(move || {
         if let Err(e) = recycle(&p) {
-            note(&format!("Cannot delete:\n{e}"), MB_OK | MB_ICONERROR);
+            note(&winrust_common::pf!("Cannot delete:\n{e}", "Não é possível excluir:\n{e}"), MB_OK | MB_ICONERROR);
         }
     });
 }
@@ -863,8 +863,9 @@ fn size_text(b: u64) -> String {
     format!("{v:.1} {u}")
 }
 
-fn plural(n: usize, one: &str) -> String {
-    format!("{n} {one}{}", if n == 1 { "" } else { "s" })
+fn plural(n: usize, one: &str, many: &str) -> String {
+    let noun = if n == 1 { one } else { many };
+    format!("{n} {}", winrust_common::pt!(noun))
 }
 
 /// %LOCALAPPDATA%\rs-search\registry-backups\2026-11-15 10-42-07  name.reg
@@ -917,30 +918,30 @@ unsafe fn run_purge(h: HWND) {
         wipe(std::path::Path::new(&path), &mut failed);
         let done = |title: &str, lines: Vec<String>, ok: bool, backup: Option<String>| Purge::Done { path: path.clone(), title: title.into(), lines, ok, backup, hot: 0 };
         if !failed.is_empty() {
-            let mut lines = vec![format!("{} could not be removed (in use or access denied):", plural(failed.len(), "item"))];
+            let mut lines = vec![winrust_common::pf!("{} could not be removed (in use or access denied):", "Falha ao remover {} (em uso ou acesso negado):", plural(failed.len(), "item", "items"))];
             lines.extend(failed.iter().take(3).cloned());
             if failed.len() > 3 {
-                lines.push(format!("... and {} more", failed.len() - 3));
+                lines.push(winrust_common::pf!("... and {} more", "... e {} mais", failed.len() - 3));
             }
-            lines.push("The registry was not touched. Close the program using them and try again.".into());
-            return post(hw, done("Some files are still there", lines, false, None));
+            lines.push(winrust_common::pt!("The registry was not touched. Close the program using them and try again.").into());
+            return post(hw, done(winrust_common::pt!("Some files are still there"), lines, false, None));
         }
-        let mut lines = vec![format!("{} removed ({})", plural(files as usize, "file"), size_text(bytes))];
+        let mut lines = vec![winrust_common::pf!("{} removed ({})", "Exclusão concluída: {} ({})", plural(files as usize, "file", "files"), size_text(bytes))];
         if hits.is_empty() {
-            lines.push("No registry entries pointed to it.".into());
-            return post(hw, done("Deleted", lines, true, None));
+            lines.push(winrust_common::pt!("No registry entries pointed to it.").into());
+            return post(hw, done(winrust_common::pt!("Deleted"), lines, true, None));
         }
         let bak = backup_path(&path);
         if let Err(e) = regsweep::backup(&hits, &bak) {
-            lines.push(format!("Registry left as is: the backup could not be written ({e})."));
-            return post(hw, done("Deleted, registry kept", lines, false, None));
+            lines.push(winrust_common::pf!("Registry left as is: the backup could not be written ({e}).", "O Registro foi preservado porque não foi possível salvar o backup ({e})."));
+            return post(hw, done(winrust_common::pt!("Deleted, registry kept"), lines, false, None));
         }
         let r = regsweep::delete(&hits);
-        lines.push(format!("{} removed", plural(r.removed, "registry entry").replace("entrys", "entries")));
+        lines.push(winrust_common::pf!("{} removed", "Removido do Registro: {}", plural(r.removed, "registry entry", "registry entries")));
         if r.denied > 0 {
-            lines.push(format!("{} need administrator rights and were left in place", r.denied));
+            lines.push(winrust_common::pf!("{} need administrator rights and were left in place", "{} precisa de direitos de administrador e foi deixado no lugar", r.denied));
         }
-        post(hw, done("Deleted", lines, r.denied == 0, Some(bak.display().to_string())));
+        post(hw, done(winrust_common::pt!("Deleted"), lines, r.denied == 0, Some(bak.display().to_string())));
     });
 }
 
@@ -1035,39 +1036,44 @@ fn purge_view(s: &St) -> Option<PView> {
     Some(match s.purge.as_ref()? {
         Purge::Scanning(path) => PView {
             glyph: ("\u{E721}", c_dim()),
-            title: ("Checking what will be removed\u{2026}".into(), c_text()),
+            title: (winrust_common::pt!("Checking what will be removed\u{2026}").into(), c_text()),
             path: path.clone(),
-            lines: vec![("Counting files and searching the registry. Nothing is deleted yet.".into(), c_dim(), false)],
+            lines: vec![(winrust_common::pt!("Counting files and searching the registry. Nothing is deleted yet.").into(), c_dim(), false)],
             note: String::new(),
             buttons: vec![],
         },
         Purge::Working(path) => PView {
             glyph: ("\u{E74D}", DANGER),
-            title: ("Deleting\u{2026}".into(), c_text()),
+            title: (winrust_common::pt!("Deleting\u{2026}").into(), c_text()),
             path: path.clone(),
-            lines: vec![("Esc hides this card; the result waits for the next Alt+Space.".into(), c_dim(), false)],
+            lines: vec![(winrust_common::pt!("Esc hides this card; the result waits for the next Alt+Space.").into(), c_dim(), false)],
             note: String::new(),
             buttons: vec![],
         },
         Purge::Confirm { path, files, bytes, hits, hot } => {
-            let mut lines = vec![(format!("{}  \u{00B7}  {}", plural(*files as usize, "file"), size_text(*bytes)), c_text(), false)];
+            let mut lines = vec![(format!("{}  \u{00B7}  {}", plural(*files as usize, "file", "files"), size_text(*bytes)), c_text(), false)];
             if hits.is_empty() {
-                lines.push(("No registry entries point to it.".into(), c_dim(), false));
+                lines.push((winrust_common::pt!("No registry entries point to it.").into(), c_dim(), false));
             } else {
-                let n = plural(hits.len(), "registry entry").replace("entrys", "entries");
-                lines.push((format!("{n} {} to it and will be removed:", if hits.len() == 1 { "points" } else { "point" }), c_dim(), false));
+                let n = plural(hits.len(), "registry entry", "registry entries");
+                let description = if hits.len() == 1 {
+                    winrust_common::pf!("{n} points to it and will be removed:", "Será removida {n} que aponta para este item:")
+                } else {
+                    winrust_common::pf!("{n} point to it and will be removed:", "Serão removidas {n} que apontam para este item:")
+                };
+                lines.push((description, c_dim(), false));
                 lines.extend(hits.iter().take(LIST_MAX).map(|h| (h.describe(), c_faint(), true)));
                 if hits.len() > LIST_MAX {
-                    lines.push((format!("+ {} more", hits.len() - LIST_MAX), c_faint(), true));
+                    lines.push((winrust_common::pf!("+ {} more", "+ {} mais", hits.len() - LIST_MAX), c_faint(), true));
                 }
             }
             PView {
                 glyph: ("\u{E74D}", DANGER),
-                title: ("Delete forever?".into(), DANGER),
+                title: (winrust_common::pt!("Delete forever?").into(), DANGER),
                 path: path.clone(),
                 lines,
-                note: if hits.is_empty() { "Files skip the Recycle Bin and cannot be restored.".into() } else { "Files skip the Recycle Bin. Registry entries are saved to a .reg backup first.".into() },
-                buttons: btn(&[("Cancel", false), ("Delete forever", true)], *hot),
+                note: if hits.is_empty() { winrust_common::pt!("Files skip the Recycle Bin and cannot be restored.").into() } else { winrust_common::pt!("Files skip the Recycle Bin. Registry entries are saved to a .reg backup first.").into() },
+                buttons: btn(&[(winrust_common::pt!("Cancel"), false), (winrust_common::pt!("Delete forever"), true)], *hot),
             }
         }
         Purge::Done { path, title, lines, ok, backup, hot } => PView {
@@ -1075,8 +1081,8 @@ fn purge_view(s: &St) -> Option<PView> {
             title: (title.clone(), if *ok { c_text() } else { DANGER }),
             path: path.clone(),
             lines: lines.iter().enumerate().map(|(i, l)| (l.clone(), if i == 0 { c_text() } else { c_dim() }, false)).collect(),
-            note: backup.as_ref().map_or(String::new(), |b| format!("Backup (double-click to restore): {b}")),
-            buttons: if backup.is_some() { btn(&[("Close", false), ("Show backup", false)], *hot) } else { btn(&[("Close", false)], 0) },
+            note: backup.as_ref().map_or(String::new(), |b| winrust_common::pf!("Backup (double-click to restore): {b}", "Backup (clique duas vezes para restaurar): {b}")),
+            buttons: if backup.is_some() { btn(&[(winrust_common::pt!("Close"), false), (winrust_common::pt!("Show backup"), false)], *hot) } else { btn(&[(winrust_common::pt!("Close"), false)], 0) },
         },
     })
 }
@@ -1242,7 +1248,7 @@ unsafe fn draw(dc: HDC, w: i32, hgt: i32, v: &View) {
     let area = RECT { left: p(58), top: mid - p(18), right: w - p(24), bottom: mid + p(18) };
     let shown = String::from_utf16_lossy(&v.text);
     if v.text.is_empty() {
-        text(dc, v.fonts[F_INPUT], c_faint(), area, "Search files and apps", DT_SINGLELINE | DT_VCENTER);
+        text(dc, v.fonts[F_INPUT], c_faint(), area, winrust_common::pt!("Search files and apps"), DT_SINGLELINE | DT_VCENTER);
     } else {
         let mut size: SIZE = zeroed();
         let old = SelectObject(dc, v.fonts[F_INPUT] as _);
@@ -1269,7 +1275,7 @@ unsafe fn draw(dc: HDC, w: i32, hgt: i32, v: &View) {
     }
     if nrows == 0 {
         if !v.text.is_empty() {
-            text(dc, v.fonts[F_NAME], c_dim(), RECT { left: 0, top: rows_top, right: w, bottom: rows_top + row_h as i32 }, "No results", DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+            text(dc, v.fonts[F_NAME], c_dim(), RECT { left: 0, top: rows_top, right: w, bottom: rows_top + row_h as i32 }, winrust_common::pt!("No results"), DT_SINGLELINE | DT_VCENTER | DT_CENTER);
         }
         return;
     }
@@ -1285,16 +1291,16 @@ unsafe fn draw(dc: HDC, w: i32, hgt: i32, v: &View) {
         text(dc, v.fonts[F_PATH], c_dim(), RECT { left, top: y0 + p(29), right, bottom: y0 + p(47) }, sub, DT_SINGLELINE | DT_END_ELLIPSIS);
     }
     let foot_y = rows_top + (nrows as f32 * row_h) as i32;
-    let more = if v.total > nrows { format!("   \u{2022}   {} results", v.total) } else { String::new() };
+    let more = if v.total > nrows { winrust_common::pf!("   \u{2022}   {} results", "   • Resultados {}", v.total) } else { String::new() };
     text(
         dc,
         v.fonts[F_HINT],
         c_faint(),
         RECT { left: p(PAD + 16), top: foot_y + p(4), right: w - p(PAD + 14), bottom: foot_y + p(FOOT_H) },
         &if v.renaming {
-            "Type the new name     \u{21B5} rename     Esc cancel".to_string()
+            winrust_common::pt!("Type the new name     \u{21B5} rename     Esc cancel").to_string()
         } else {
-            format!("\u{2191}\u{2193} select     \u{21B5} open     Ctrl+\u{21B5} folder     Right-click menu     Esc close{more}")
+            winrust_common::pf!("\u{2191}\u{2193} select     \u{21B5} open     Ctrl+\u{21B5} folder     Right-click menu     Esc close{more}", "↑↓ selecionar     ↵ abrir     Ctrl+↵ pasta     Clique direito: menu     Esc fechar{more}")
         },
         DT_SINGLELINE | DT_VCENTER,
     );
@@ -1313,7 +1319,7 @@ unsafe fn draw(dc: HDC, w: i32, hgt: i32, v: &View) {
             let label = if i == 3 && v.menu_pinned { "Remove from Start" } else { label };
             let y0 = t + pad + i as i32 * ih;
             let c = if i == MENU.len() - 1 { DANGER } else { c_text() };
-            text(dc, v.fonts[F_PATH], c, RECT { left: l + pad + p(12), top: y0, right: l + mw - pad, bottom: y0 + ih }, label, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+            text(dc, v.fonts[F_PATH], c, RECT { left: l + pad + p(12), top: y0, right: l + mw - pad, bottom: y0 + ih }, winrust_common::pt!(label), DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
         }
     }
 }
@@ -1353,10 +1359,10 @@ fn main() {
             lpszMenuName: null(),
             lpszClassName: cls.as_ptr(),
         });
-        let main = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST, cls.as_ptr(), wide("rs launcher").as_ptr(), WS_POPUP, 0, 0, 10, 10, null_mut(), null_mut(), hi, null());
+        let main = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST, cls.as_ptr(), wide(winrust_common::pt!("rs launcher")).as_ptr(), WS_POPUP, 0, 0, 10, 10, null_mut(), null_mut(), hi, null());
         if main.is_null() {
-            let msg = wide(&format!("cannot create window (error {})", GetLastError()));
-            MessageBoxW(null_mut(), msg.as_ptr(), wide("rs launcher").as_ptr(), MB_ICONERROR);
+            let msg = wide(&winrust_common::pf!("cannot create window (error {})", "não é possível criar janela (erro {})", GetLastError()));
+            MessageBoxW(null_mut(), msg.as_ptr(), wide(winrust_common::pt!("rs launcher")).as_ptr(), MB_ICONERROR);
             return;
         }
 
@@ -1364,7 +1370,7 @@ fn main() {
         apply_style(main);
 
         if RegisterHotKey(main, 1, MOD_ALT | MOD_NOREPEAT, VK_SPACE as u32) == 0 {
-            MessageBoxW(null_mut(), wide("Alt+Space is taken (is the launcher already running?)").as_ptr(), wide("rs launcher").as_ptr(), MB_ICONERROR);
+            MessageBoxW(null_mut(), wide(winrust_common::pt!("Alt+Space is taken (is the launcher already running?)")).as_ptr(), wide(winrust_common::pt!("rs launcher")).as_ptr(), MB_ICONERROR);
             return;
         }
         // SearchHost is started by svchost as a packaged app, which ignores the IFEO block the installer sets: end it whenever it appears.

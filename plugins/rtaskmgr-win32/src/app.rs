@@ -1005,11 +1005,11 @@ impl App {
                 }
             }
         }
-        if (act == Act::EndTask && pids.len() > 1 || act == Act::EndTree) && !self.confirm(&tf!("Завершить процессов: {} (для дерева — вместе с потомками)?", "End {} processes (for a tree, together with their children)?", pids.len())) {
+        if (act == Act::EndTask && pids.len() > 1 || act == Act::EndTree) && !self.confirm(&tf!("Завершить процессов: {} (для дерева — вместе с потомками)?", "End {} processes (for a tree, together with their children)?", "Terminar processos {} (para uma árvore, junto com seus filhos)?", pids.len())) {
             return;
         }
         let report = |what: &str, ok: usize| {
-            self.toast(&if ok == pids.len() { tf!("{what}: готово ({ok})", "{what}: done ({ok})") } else { tf!("{what}: удалось {ok} из {} — для остальных нужны права администратора{}", "{what}: {ok} of {} succeeded - the rest need administrator rights{}", pids.len(), if self.data.borrow().is_admin { "" } else { t!(" (меню «…» → «Перезапустить от имени администратора»)", " (menu '…' → 'Restart as administrator')") }) });
+            self.toast(&if ok == pids.len() { tf!("{what}: готово ({ok})", "{what}: done ({ok})", "{what}: concluído ({ok})") } else { tf!("{what}: удалось {ok} из {} — для остальных нужны права администратора{}", "{what}: {ok} of {} succeeded - the rest need administrator rights{}", "{what}: {ok} de {} bem-sucedido - o restante precisa de direitos de administrador{}", pids.len(), if self.data.borrow().is_admin { "" } else { t!(" (меню «…» → «Перезапустить от имени администратора»)", " (menu '…' → 'Restart as administrator')") }) });
         };
         match act {
             Act::EndTask => {
@@ -1024,7 +1024,7 @@ impl App {
                 let all = descendants(&parents, &pids);
                 let ok = all.iter().filter(|&&p| d.sys.process(sysinfo::Pid::from_u32(p)).is_some_and(|x| x.kill())).count();
                 drop(d);
-                self.toast(&tf!("Завершено {ok} из {} (с потомками)", "Ended {ok} of {} (with children)", all.len()));
+                self.toast(&tf!("Завершено {ok} из {} (с потомками)", "Ended {ok} of {} (with children)", "Terminou {ok} de {} (com crianças)", all.len()));
             }
             Act::Prio(c) => report(t!("Приоритет", "Priority"), pids.iter().filter(|&&p| sys::set_priority(p, c)).count()),
             Act::Suspend(on) => {
@@ -1082,7 +1082,7 @@ impl App {
                         t!("Такое правило уже есть (страница «Правила»)", "This rule already exists ('Rules' page)").to_string()
                     } else {
                         d.rules.push(store::Rule { proc: name.clone(), cpu: 25.0, secs: 60, act, hits: 0 });
-                        tf!("Правило добавлено: «{name}» — ЦП > 25% дольше 60 с", "Rule added: '{name}' - CPU > 25% for over 60 s")
+                        tf!("Правило добавлено: «{name}» — ЦП > 25% дольше 60 с", "Rule added: '{name}' - CPU > 25% for over 60 s", "Regra adicionada: '{name}' - CPU > 25% por mais de 60 s")
                     }
                 };
                 self.save_settings();
@@ -1100,9 +1100,9 @@ impl App {
         };
         let n = row.aux.clone();
         self.toast(&match sys::service_ctl(&n, start) {
-            Ok(()) => tf!("Служба {n}: команда отправлена", "Service {n}: command sent"),
-            Err(5) => tf!("Служба {n}: отказано в доступе — запустите от администратора", "Service {n}: access denied - run as administrator"),
-            Err(e) => tf!("Служба {n}: ошибка Win32 {e}", "Service {n}: Win32 error {e}"),
+            Ok(()) => tf!("Служба {n}: команда отправлена", "Service {n}: command sent", "Serviço {n}: comando enviado"),
+            Err(5) => tf!("Служба {n}: отказано в доступе — запустите от администратора", "Service {n}: access denied - run as administrator", "Serviço {n}: acesso negado - execute como administrador"),
+            Err(e) => tf!("Служба {n}: ошибка Win32 {e}", "Service {n}: Win32 error {e}", "Serviço {n}: erro Win32 {e}"),
         });
     }
 
@@ -1121,8 +1121,8 @@ impl App {
             match d.startup.iter().find(|s| s.key() == row.key) {
                 Some(it) => match startup::set_enabled(it, on) {
                     Ok(()) => format!("«{}»: {}", it.name, if on { t!("включено", "enabled") } else { t!("отключено — не будет запускаться при входе в Windows", "disabled - will not start with Windows") }),
-                    Err(5) => tf!("«{}»: нужны права администратора", "'{}': administrator rights needed", it.name),
-                    Err(e) => tf!("«{}»: ошибка Win32 {e}", "'{}': Win32 error {e}", it.name),
+                    Err(5) => tf!("«{}»: нужны права администратора", "'{}': administrator rights needed", "'{}': direitos de administrador necessários", it.name),
+                    Err(e) => tf!("«{}»: ошибка Win32 {e}", "'{}': Win32 error {e}", "'{}': erro Win32 {e}", it.name),
                 },
                 None => return,
             }
@@ -1145,7 +1145,7 @@ impl App {
         // донор токена для программ, которые профиль запустит обратно: sihost.exe работает в каждом сеансе без повышения
         let donors: Vec<u32> = self.data.borrow().procs.iter().filter(|p| p.name.eq_ignore_ascii_case("sihost.exe")).map(|p| p.pid).collect();
         match crate::boost::start(id, on, donors) {
-            Ok(()) => self.toast(&tf!("{}: выполняется…", "{}: running…", id.title())),
+            Ok(()) => self.toast(&tf!("{}: выполняется…", "{}: running…", "{}: executando…", id.title())),
             Err(e) => self.toast(&format!("{}: {e}", id.title())),
         }
         self.rebuild();
@@ -1174,8 +1174,8 @@ impl App {
         let path = dir.join(format!("rtaskmgr-{}-{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}.csv", page_title(ui.page)));
         drop(ui);
         match std::fs::write(&path, out) {
-            Ok(()) => self.toast(&tf!("Сохранено: {}", "Saved: {}", path.display())),
-            Err(e) => self.toast(&tf!("Не удалось сохранить CSV: {e}", "Could not save CSV: {e}")),
+            Ok(()) => self.toast(&tf!("Сохранено: {}", "Saved: {}", "Salvo: {}", path.display())),
+            Err(e) => self.toast(&tf!("Не удалось сохранить CSV: {e}", "Could not save CSV: {e}", "Não foi possível salvar CSV: {e}")),
         }
     }
 

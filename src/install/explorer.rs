@@ -81,7 +81,7 @@ fn trim_write((key, name): Dword<'_>, value: u32) -> Result<(), String> {
         return Err(trim_registry_error(key, name, code));
     }
     if trim_read((key, name))? != Some(value) {
-        return Err(tf!("{key}: не удалось подтвердить запись {name}", "{key}: could not verify the write to {name}"));
+        return Err(tf!("{key}: не удалось подтвердить запись {name}", "{key}: could not verify the write to {name}", "{key}: não foi possível verificar a gravação em {name}"));
     }
     Ok(())
 }
@@ -197,7 +197,7 @@ pub(crate) fn rx_uninstall() -> Result<(), String> {
         let _ = run("reg", &["delete", k, "/f"]); // only our HKCU override; the system's verbs under HKLM stay
         let bak = rx_folders_bak(i);
         if bak.is_file() {
-            soft(&tf!("привязка папок {k} не возвращена", "folder verbs {k} were not restored"), run("reg", &["import", &bak.display().to_string()]));
+            soft(&tf!("привязка папок {k} не возвращена", "folder verbs {k} were not restored", "verbos de pasta {k} não foram restaurados"), run("reg", &["import", &bak.display().to_string()]));
         }
     }
     for n in ["rs-shell.exe", "rust-explorer.exe"] {

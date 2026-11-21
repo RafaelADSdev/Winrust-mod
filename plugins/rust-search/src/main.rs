@@ -262,7 +262,7 @@ fn journal(h: HANDLE) -> Result<USN_JOURNAL_DATA_V0, String> {
         DeviceIoControl(h, FSCTL_QUERY_USN_JOURNAL, ptr::null(), 0, &mut j as *mut _ as _, size_of::<USN_JOURNAL_DATA_V0>() as u32, &mut n, ptr::null_mut())
     };
     if ok == 0 {
-        return Err(format!("USN journal not available (error {})", unsafe { GetLastError() }));
+        return Err(winrust_common::pf!("USN journal not available (error {})", "Diário USN não disponível (erro {})", unsafe { GetLastError() }));
     }
     Ok(j)
 }
@@ -295,7 +295,7 @@ fn tail(drive: char, sh: &Mutex<Shared>) {
             DeviceIoControl(h, FSCTL_READ_USN_JOURNAL, &rd as *const _ as _, size_of::<READ_USN_JOURNAL_DATA_V0>() as u32, buf.as_mut_ptr() as _, buf.len() as u32, &mut n, ptr::null_mut())
         };
         if ok == 0 {
-            eprintln!("journal read failed (error {}); rebuilding the index", unsafe { GetLastError() });
+            eprintln!("{}", winrust_common::pf!("journal read failed (error {}); rebuilding the index", "falha na leitura do diário (erro {}); reconstruindo o índice", unsafe { GetLastError() }));
             unsafe { CloseHandle(h) };
             return;
         }
@@ -331,11 +331,11 @@ fn maintain(drive: char, sh: Arc<Mutex<Shared>>) {
             }) {
                 Ok((idx, j)) => {
                     *sh.lock().unwrap() = Shared { idx, jid: j.UsnJournalID, usn: j.NextUsn, dirty: true };
-                    eprintln!("index rebuilt");
+                    eprintln!("{}", winrust_common::pf!("index rebuilt", "índice reconstruído"));
                     break;
                 }
                 Err(e) => {
-                    eprintln!("rebuild failed: {e}; retrying in 30s");
+                    eprintln!("{}", winrust_common::pf!("rebuild failed: {e}; retrying in 30s", "falha na reconstrução: {e}; tentando novamente em 30s"));
                     thread::sleep(Duration::from_secs(30));
                 }
             }
@@ -371,7 +371,7 @@ fn save(drive: char, sh: &Mutex<Shared>) {
     });
     match r {
         Ok(()) => g.dirty = false,
-        Err(e) => eprintln!("cannot save index to {}: {e}", path.display()),
+        Err(e) => eprintln!("{}", winrust_common::pf!("cannot save index to {}: {e}", "não é possível salvar o índice em {}: {e}", path.display())),
     }
 }
 
@@ -478,7 +478,7 @@ fn pipe_security(allow: Option<&str>) -> Result<Option<SECURITY_ATTRIBUTES>, Str
     let mut sd = ptr::null_mut();
     let ok = unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), 1, &mut sd, ptr::null_mut()) };
     if ok == 0 {
-        return Err(format!("bad --allow SID (error {})", unsafe { GetLastError() }));
+        return Err(winrust_common::pf!("bad --allow SID (error {})", "SID --allow incorreto (erro {})", unsafe { GetLastError() }));
     }
     // sd is intentionally never freed: it lives as long as the pipe, i.e. the process
     Ok(Some(SECURITY_ATTRIBUTES { nLength: size_of::<SECURITY_ATTRIBUTES>() as u32, lpSecurityDescriptor: sd, bInheritHandle: 0 }))
@@ -495,7 +495,7 @@ fn serve(drive: char, allow: Option<String>) -> Result<(), String> {
         None => (scan(h)?, j.NextUsn, "scanned"),
     };
     unsafe { CloseHandle(h) };
-    eprintln!("{how} {} entries in {:?}, serving {}", idx.len(), t.elapsed(), pipe_name(drive));
+    eprintln!("{}", winrust_common::pf!("{how} {} entries in {:?}, serving {}", "{how} Entradas {} em {:?}, servindo {}", idx.len(), t.elapsed(), pipe_name(drive)));
     let idx = Arc::new(Mutex::new(Shared { idx, jid: j.UsnJournalID, usn, dirty: how == "scanned" }));
 
     let sh = idx.clone();
@@ -511,7 +511,7 @@ fn serve(drive: char, allow: Option<String>) -> Result<(), String> {
         CreateNamedPipeW(name.as_ptr(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 1 << 16, 1 << 16, 0, sa.as_ref().map_or(ptr::null(), |s| s as *const _))
     };
     if pipe == INVALID_HANDLE_VALUE {
-        return Err(format!("cannot create pipe (error {}); is a server already running?", unsafe { GetLastError() }));
+        return Err(winrust_common::pf!("cannot create pipe (error {}); is a server already running?", "não é possível criar pipe (erro {}); um servidor já está em execução?", unsafe { GetLastError() }));
     }
     loop {
         let ok = unsafe { ConnectNamedPipe(pipe, ptr::null_mut()) };
@@ -536,13 +536,13 @@ fn serve(drive: char, allow: Option<String>) -> Result<(), String> {
 fn bench(drive: char, args: &[String]) -> Result<(), String> {
     let terms = split_terms(&args.join(" "));
     if terms.is_empty() {
-        return Err("usage: rs --bench <term>".into());
+        return Err(winrust_common::pt!("usage: rs --bench <term>").into());
     }
     let idx = scan(open_volume(drive)?)?;
     for _ in 0..5 {
         let t = Instant::now();
         let (_, total) = query(&idx, drive, &terms);
-        println!("query {:?} -> {total} hits in {:?}", terms, t.elapsed());
+        println!("{}", winrust_common::pf!("query {:?} -> {total} hits in {:?}", "consulta {:?} -> ocorrências {total} em {:?}", terms, t.elapsed()));
     }
     Ok(())
 }
@@ -553,7 +553,7 @@ fn ps(script: &str) -> Result<String, String> {
     let o = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
-        .map_err(|e| format!("cannot run powershell: {e}"))?;
+        .map_err(|e| winrust_common::pf!("cannot run powershell: {e}", "não é possível executar o PowerShell: {e}"))?;
     if o.status.success() {
         Ok(String::from_utf8_lossy(&o.stdout).into_owned())
     } else {
@@ -577,7 +577,7 @@ fn install() -> Result<(), String> {
         }
     };
     if !winrust_common::reg::valid_sid(&sid) {
-        return Err(format!("cannot determine your SID from: {who}"));
+        return Err(winrust_common::pf!("cannot determine your SID from: {who}", "não é possível determinar seu SID de: {who}"));
     }
     let drives = fixed_ntfs_drives();
     if drives.is_empty() {
@@ -587,9 +587,9 @@ fn install() -> Result<(), String> {
     let dir = install_dir();
     let dst = dir.join("rs.exe");
     let me = env::current_exe().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e} (run as admin)", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| winrust_common::pf!("{}: {e} (run as admin)", "{}: {e} (executar como administrador)", dir.display()))?;
     if me.canonicalize().ok() != dst.canonicalize().ok() {
-        std::fs::copy(&me, &dst).map_err(|e| format!("copy to {}: {e}", dst.display()))?;
+        std::fs::copy(&me, &dst).map_err(|e| winrust_common::pf!("copy to {}: {e}", "copiar para {}: {e}", dst.display()))?;
     }
     let list = drives.iter().map(|d| format!("'{d}'")).collect::<Vec<_>>().join(",");
     ps(&format!(
@@ -604,7 +604,7 @@ fn install() -> Result<(), String> {
         exe = dst.display()
     ))?;
     let names: Vec<String> = drives.iter().map(|d| format!("{d}:")).collect();
-    println!("installed to {} for {} and started; runs at every boot. Query with: rs <term>", dst.display(), names.join(" "));
+    println!("{}", winrust_common::pf!("installed to {} for {} and started; runs at every boot. Query with: rs <term>", "instalado em {} para {} e iniciado; é executado a cada inicialização. Consultar com: rs <term>", dst.display(), names.join(" ")));
     Ok(())
 }
 
@@ -613,7 +613,7 @@ fn uninstall() -> Result<(), String> {
     let _ = std::fs::remove_dir_all(install_dir());
     // the service's saved indexes live in SYSTEM's profile
     let _ = std::fs::remove_dir_all(PathBuf::from(env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())).join(r"System32\config\systemprofile\AppData\Local\rs-search"));
-    println!("uninstalled");
+    println!("{}", winrust_common::pf!("uninstalled", "desinstalado"));
     Ok(())
 }
 
@@ -636,7 +636,7 @@ fn serve_log(drive: char) {
     let Ok(f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) else { return };
     unsafe { SetStdHandle(STD_ERROR_HANDLE, f.into_raw_handle() as _) };
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    eprintln!("[{t}] serve {drive}: start"); // unix seconds, like the launcher's install.log
+    eprintln!("{}", winrust_common::pf!("[{t}] serve {drive}: start", "[{t}] servir {drive}: início")); // unix seconds, like the launcher's install.log
 }
 
 fn main() {
@@ -668,7 +668,7 @@ fn main() {
     let q = args.join(" ");
     let terms = split_terms(&q);
     if terms.is_empty() {
-        eprintln!("usage: rs [-d X] <term>...   |   rs [-d X] --serve");
+        eprintln!("{}", winrust_common::pf!("usage: rs [-d X] <term>...   |   rs [-d X] --serve", "Uso: rs [-d X] <termo>...   |   rs [-d X] --serve"));
         std::process::exit(2);
     }
 
@@ -681,7 +681,7 @@ fn main() {
                 print!("{out}");
             }
             Some(Err(e)) => {
-                eprintln!("cannot reach the {d}: service: {e}");
+                eprintln!("{}", winrust_common::pf!("cannot reach the {d}: service: {e}", "não é possível acessar o {d}: serviço: {e}"));
                 std::process::exit(1);
             }
             None => {}
@@ -697,7 +697,7 @@ fn main() {
             eprintln!("{e}");
             std::process::exit(1);
         });
-        eprintln!("no server running; indexed {} entries on {d}: in {:?}", idx.len(), t.elapsed());
+        eprintln!("{}", winrust_common::pf!("no server running; indexed {} entries on {d}: in {:?}", "nenhum servidor em execução; entradas {} indexadas em {d}: em {:?}", idx.len(), t.elapsed()));
         print!("{}", render(&idx, d, &terms));
     }
 }

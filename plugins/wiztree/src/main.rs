@@ -130,7 +130,7 @@ fn fixed_drives() -> Vec<char> {
 fn rescan(hwnd: HWND, drive: char) {
     APP.with_borrow_mut(|a| {
         (a.tree, a.drive, a.cur, a.hot, a.cells) = (None, drive, ROOT, None, vec![]);
-        a.status = format!("Reading the MFT of {drive}: ...");
+        a.status = winrust_common::pf!("Reading the MFT of {drive}: ...", "Lendo a MFT de {drive}: …");
     });
     unsafe { InvalidateRect(hwnd, null(), 0) };
     let h = hwnd as isize;
@@ -195,7 +195,7 @@ unsafe fn paint(hwnd: HWND) {
                 head = format!("{head}    {}", human(size));
                 foot = match a.hot.and_then(|n| a.cells.get(n)) {
                     Some((_, id)) => format!("{}    {}", path_of(&t.recs, *id, a.drive).0, human(t.tot[id])),
-                    None => "Click: open folder / show file    Right click, Backspace: up    Tab: next drive    F5: rescan".into(),
+                    None => winrust_common::pt!("Click: open folder / show file    Right click, Backspace: up    Tab: next drive    F5: rescan").into(),
                 };
             }
             text(&head, RECT { left: (12.0 * k) as i32, top: 0, right: w - 12, bottom: top }, ACCENT, one);
@@ -317,7 +317,7 @@ fn main() {
         let (inst, class) = (GetModuleHandleW(null()), wide("WinRustDisk"));
         let wc = WNDCLASSW { style: 0, lpfnWndProc: Some(proc), cbClsExtra: 0, cbWndExtra: 0, hInstance: inst, hIcon: null_mut(), hCursor: LoadCursorW(null_mut(), IDC_ARROW), hbrBackground: null_mut(), lpszMenuName: null(), lpszClassName: class.as_ptr() };
         RegisterClassW(&wc);
-        let hwnd = CreateWindowExW(0, class.as_ptr(), wide("WinRust Disk").as_ptr(), WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800, null_mut(), null_mut(), inst, null());
+        let hwnd = CreateWindowExW(0, class.as_ptr(), wide(winrust_common::pt!("WinRust Disk")).as_ptr(), WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800, null_mut(), null_mut(), inst, null());
         rescan(hwnd, drive);
         let mut m: MSG = std::mem::zeroed();
         while GetMessageW(&mut m, null_mut(), 0, 0) > 0 {

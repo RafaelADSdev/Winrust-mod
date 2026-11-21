@@ -127,7 +127,7 @@ pub fn ras_error(code: u32) -> String {
             return s;
         }
     }
-    tf!("код {}", "code {}", code)
+    tf!("код {}", "code {}", "código {}", code)
 }
 
 /// Dials a profile with the credentials Windows saved for it. Blocks until it is up or has failed: call from a thread.
@@ -228,7 +228,7 @@ pub fn clean_temp(done: impl FnOnce(String) + Send + 'static) {
     std::thread::spawn(move || {
         let (b, n) = clean_dir(&temp_dir(), TEMP_AGE);
         TEMP_BYTES.store(dir_bytes(&temp_dir(), TEMP_AGE), Relaxed);
-        done(tf!("Удалено файлов: {} ({})", "Files deleted: {} ({})", n, crate::power::size(b)));
+        done(tf!("Удалено файлов: {} ({})", "Files deleted: {} ({})", "Arquivos excluídos: {} ({})", n, crate::power::size(b)));
     });
 }
 

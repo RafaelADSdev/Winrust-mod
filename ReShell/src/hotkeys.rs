@@ -105,7 +105,7 @@ unsafe extern "system" fn hook(n: i32, w: WPARAM, l: LPARAM) -> LRESULT {
 
 pub fn run() -> i32 {
     let h = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook), GetModuleHandleW(std::ptr::null()), 0) };
-    if h.is_null() { eprintln!("hook failed"); return 1 }
+    if h.is_null() { eprintln!("{}", winrust_common::pf!("hook failed", "gancho falhou")); return 1 }
     HOOK.store(h as isize, Relaxed);
     let mut m: MSG = unsafe { std::mem::zeroed() };
     while unsafe { GetMessageW(&mut m, std::ptr::null_mut(), 0, 0) } > 0 {}

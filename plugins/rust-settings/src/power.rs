@@ -137,8 +137,8 @@ pub fn timeout_text(t: Timeout) -> String {
 fn secs_text(s: u32) -> String {
     match s {
         0 => t!("Никогда", "Never").into(),
-        s if s < 3600 => tf!("{} мин", "{} min", s / 60),
-        s => tf!("{} ч", "{} h", s / 3600),
+        s if s < 3600 => tf!("{} мин", "{} min", "{} min", s / 60),
+        s => tf!("{} ч", "{} h", "{}h", s / 3600),
     }
 }
 

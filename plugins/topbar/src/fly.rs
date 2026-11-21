@@ -65,7 +65,7 @@ struct Conn {
 
 fn auth_name(a: i32) -> &'static str {
     match a {
-        1 => "Open",
+        1 => winrust_common::pt!("Open"),
         2 => "WEP",
         3 => "WPA",
         4 => "WPA‑Personal",
@@ -73,7 +73,7 @@ fn auth_name(a: i32) -> &'static str {
         7 => "WPA2‑Personal",
         8 => "WPA3",
         9 => "WPA3‑Personal",
-        _ => "Secured",
+        _ => winrust_common::pt!("Secured"),
     }
 }
 
@@ -255,9 +255,9 @@ unsafe fn on_files(hw: HWND, hd: HDROP) {
     }
     DragFinish(hd);
     note(&match added.len() {
-        0 => "Already in Start".to_string(),
-        1 => format!("Added to Start: {}", added[0]),
-        n => format!("Added {n} items to Start"),
+        0 => winrust_common::pt!("Already in Start").to_string(),
+        1 => winrust_common::pf!("Added to Start: {}", "Adicionado ao menu Iniciar: {}", added[0]),
+        n => winrust_common::pf!("Added {n} items to Start", "{n} itens adicionados ao menu Iniciar"),
     });
     KillTimer(hw, 6);
     InvalidateRect(hw, null(), 0);
@@ -520,7 +520,7 @@ unsafe fn read_nets() {
             NOTE.set(String::new());
         } else if now_ms().saturating_sub(t0) > 25_000 {
             CONNECTING.set(None);
-            NOTE.set(tf!("Не удалось подключиться к «{ssid}»", "Could not connect to “{ssid}”"));
+            NOTE.set(tf!("Не удалось подключиться к «{ssid}»", "Could not connect to “{ssid}”", "Não foi possível conectar a “{ssid}”"));
         }
     }
 }
@@ -536,7 +536,7 @@ unsafe fn forget(ssid: &str) {
     let w = wide(&p);
     let mut ok = false;
     for_each_wlan(|h, g| ok |= WlanDeleteProfile(h, g, w.as_ptr(), null()) == 0);
-    NOTE.set(if ok { tf!("Сеть «{ssid}» забыта", "Forgot “{ssid}”") } else { tf!("Не удалось забыть «{ssid}»", "Could not forget “{ssid}”") });
+    NOTE.set(if ok { tf!("Сеть «{ssid}» забыта", "Forgot “{ssid}”", "Esqueci “{ssid}”") } else { tf!("Не удалось забыть «{ssid}»", "Could not forget “{ssid}”", "Não poderia esquecer “{ssid}”") });
     read_nets();
 }
 
@@ -789,7 +789,7 @@ pub fn context_menu(x: i32) {
         MItem::new(t!("Персонализация", "Personalization")),
         MItem::new(t!("Диспетчер задач", "Task Manager")).hint("Ctrl+Shift+Esc").sep(),
         MItem::new(t!("Чистильщик диска", "Disk Cleaner")),
-        MItem::new(t!("Программы WinRust на English", "WinRust apps in Русский")), // shared with the other WinRust programs
+        MItem::new(t!("Язык WinRust", "WinRust language")),
         MItem::new(t!("Закрыть панель", "Close the bar")).danger().sep(),
     ];
     if pu {
@@ -804,7 +804,18 @@ pub fn context_menu(x: i32) {
             2 => open(&wide(&format!(r"{}\System32\taskmgr.exe", std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())))),
             3 => open_cleaner(),
             99 => crate::open_purge(),
-            4 => crate::i18n::set_english(!crate::i18n::english()),
+            4 => {
+                let current = winrust_common::locale::language();
+                let languages = winrust_common::locale::Language::ALL;
+                let items = languages.iter().map(|language| MItem::new(language.label()).on(*language == current)).collect();
+                menu(x, None, items, move |choice| {
+                    let Some(language) = languages.get(choice) else { return };
+                    if let Err(e) = winrust_common::locale::set_language(*language) {
+                        let message = tf!("Не удалось сохранить язык: {e}", "Could not save the language: {e}", "Não foi possível salvar o idioma: {e}");
+                        MessageBoxW(BAR.load(Relaxed) as HWND, wide(&message).as_ptr(), wide("WinRust").as_ptr(), MB_ICONERROR);
+                    }
+                });
+            }
             _ => _ = PostMessageW(FindWindowW(wide("topbar").as_ptr(), null()), WM_CLOSE, 0, 0), // quits the bar, brings the Windows taskbar back
         }
     });
@@ -977,7 +988,7 @@ unsafe fn app_menu(hw: HWND, i: usize, x: i32, y: i32) {
     let m = CreatePopupMenu();
     let path = wstr(&lnk);
     let file = !path.starts_with("shell:"); // Store apps have no file to run elevated or to show in a folder
-    for (id, label) in [(1, "Open"), (2, "Run as administrator"), (3, "Open file location"), (4, if start_pinned(&path) { "Remove from Start" } else { "Add to Start" })] {
+    for (id, label) in [(1, winrust_common::pt!("Open")), (2, winrust_common::pt!("Run as administrator")), (3, winrust_common::pt!("Open file location")), (4, if start_pinned(&path) { winrust_common::pt!("Remove from Start") } else { winrust_common::pt!("Add to Start") })] {
         if file || id == 1 || id == 4 {
             AppendMenuW(m, MF_STRING, id, wide(label).as_ptr());
         }
@@ -1304,12 +1315,12 @@ unsafe fn paint(hw: HWND, k: Kind) {
         Kind::Cal => {
             let (y, m) = CAL.get();
             SelectObject(dc, f_title);
-            text(dc, &format!("{} {y}", MONTHS[m as usize - 1]), r(16, 10, w - 100, 42), pal().text, DT_LEFT);
+            text(dc, &format!("{} {y}", winrust_common::pt!(MONTHS[m as usize - 1])), r(16, 10, w - 100, 42), pal().text, DT_LEFT);
             SelectObject(dc, f_glyph);
             text(dc, "\u{E70E}", r(w - 84, 10, w - 52, 42), pal().text, DT_CENTER);
             text(dc, "\u{E70D}", r(w - 48, 10, w - 16, 42), pal().text, DT_CENTER);
             SelectObject(dc, f_small);
-            for (i, d) in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].iter().enumerate() {
+            for (i, d) in [winrust_common::pt!("Mo"), winrust_common::pt!("Tu"), winrust_common::pt!("We"), winrust_common::pt!("Th"), winrust_common::pt!("Fr"), winrust_common::pt!("Sa"), winrust_common::pt!("Su")].iter().enumerate() {
                 text(dc, d, r(18 + 42 * i as i32, 54, 60 + 42 * i as i32, 78), pal().dim, DT_CENTER);
             }
             let t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
@@ -1372,7 +1383,7 @@ unsafe fn paint(hw: HWND, k: Kind) {
             if let Some((i, p)) = pass {
                 let name = NETS.with_borrow(|n| n.get(i).map(|n| n.ssid.clone()).unwrap_or_default());
                 SelectObject(dc, f_txt);
-                text(dc, &tf!("Пароль для «{name}»", "Password for “{name}”"), r(18, 62, w - 18, 84), pal().text, DT_LEFT);
+                text(dc, &tf!("Пароль для «{name}»", "Password for “{name}”", "Senha para “{name}”"), r(18, 62, w - 18, 84), pal().text, DT_LEFT);
                 fill(dc, r(16, 90, w - 16, 128), pal().accent, sc(10));
                 fill(dc, r(18, 92, w - 18, 126), card, sc(8));
                 let dots = "•".repeat(p.chars().count());
@@ -1573,7 +1584,7 @@ unsafe fn paint(hw: HWND, k: Kind) {
             SelectObject(dc, f_txt);
             let q = QUERY.with_borrow(|q| q.clone());
             if q.is_empty() {
-                text(dc, "Type to search apps", r(64, 20, w - 64, 56), pal().dim, DT_LEFT);
+                text(dc, winrust_common::pt!("Type to search apps"), r(64, 20, w - 64, 56), pal().dim, DT_LEFT);
             } else {
                 text(dc, &q, r(64, 20, w - 64, 56), if SELALL.get() { pal().accent } else { pal().text }, DT_LEFT);
             }
@@ -1586,11 +1597,11 @@ unsafe fn paint(hw: HWND, k: Kind) {
             let f = filtered();
             if f.is_empty() {
                 if q.is_empty() {
-                    text(dc, "Nothing here yet", r(24, 76, w - 24, 106), pal().text, DT_LEFT);
-                    text(dc, "Drag an app or file onto the Start button to add it", r(24, 106, w - 24, 134), pal().dim, DT_LEFT);
-                    text(dc, "Or search an app and right-click it → Add to Start", r(24, 134, w - 24, 162), pal().dim, DT_LEFT);
+                    text(dc, winrust_common::pt!("Nothing here yet"), r(24, 76, w - 24, 106), pal().text, DT_LEFT);
+                    text(dc, winrust_common::pt!("Drag an app or file onto the Start button to add it"), r(24, 106, w - 24, 134), pal().dim, DT_LEFT);
+                    text(dc, winrust_common::pt!("Or search an app and right-click it → Add to Start"), r(24, 134, w - 24, 162), pal().dim, DT_LEFT);
                 } else {
-                    text(dc, "No apps found", r(24, 76, w - 24, 116), pal().dim, DT_LEFT);
+                    text(dc, winrust_common::pt!("No apps found"), r(24, 76, w - 24, 116), pal().dim, DT_LEFT);
                 }
             }
             let rs = rects(k);
@@ -1642,8 +1653,8 @@ unsafe fn paint(hw: HWND, k: Kind) {
             SelectObject(dc, f_small);
             let note = NOTE.with_borrow(|n| n.clone());
             let hint = match CONFIRM.get() {
-                2 => "Click again to restart".to_string(),
-                3 => "Click again to shut down".to_string(),
+                2 => winrust_common::pt!("Click again to restart").to_string(),
+                3 => winrust_common::pt!("Click again to shut down").to_string(),
                 _ if !note.is_empty() => note,
                 _ => std::env::var("USERNAME").unwrap_or_default(),
             };

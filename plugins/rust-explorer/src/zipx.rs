@@ -509,7 +509,7 @@ struct Bits<R: Read> {
 }
 
 fn eof() -> io::Error {
-    io::Error::new(io::ErrorKind::UnexpectedEof, "compressed data ends too early")
+    io::Error::new(io::ErrorKind::UnexpectedEof, winrust_common::pt!("compressed data ends too early"))
 }
 
 fn bad(m: &str) -> io::Error {
@@ -599,7 +599,7 @@ impl Table {
             code = (code + count[b - 1]) << 1;
             next[b] = code;
             if count[b] > 0 && code + count[b] > 1 << b {
-                return Err(bad("oversubscribed Huffman code"));
+                return Err(bad(winrust_common::pt!("oversubscribed Huffman code")));
             }
         }
         let mut t = vec![0u16; 1 << max];
@@ -616,9 +616,9 @@ impl Table {
         Ok(Table { max, t })
     }
     fn sym<R: Read>(&self, b: &mut Bits<R>) -> io::Result<usize> {
-        let e = *self.t.get(b.peek(self.max)? as usize).ok_or_else(|| bad("bad Huffman code"))?;
+        let e = *self.t.get(b.peek(self.max)? as usize).ok_or_else(|| bad(winrust_common::pt!("bad Huffman code")))?;
         if e == 0 {
-            return Err(bad("bad Huffman code"));
+            return Err(bad(winrust_common::pt!("bad Huffman code")));
         }
         b.take((e >> 9) as u32)?;
         Ok((e & 511) as usize)
@@ -658,7 +658,7 @@ pub fn inflate<R: Read, W: Write>(r: R, w: &mut W, progress: &mut dyn FnMut(u64)
                 b.take(b.n % 8)?;
                 let len = b.bits(16)? as usize;
                 if b.bits(16)? as usize != !len & 0xFFFF {
-                    return Err(bad("stored block length"));
+                    return Err(bad(winrust_common::pt!("stored block length")));
                 }
                 b.bytes(len, &mut out)?;
             }
@@ -669,7 +669,7 @@ pub fn inflate<R: Read, W: Write>(r: R, w: &mut W, progress: &mut dyn FnMut(u64)
                 } else {
                     let (hlit, hdist, hclen) = (b.bits(5)? as usize + 257, b.bits(5)? as usize + 1, b.bits(4)? as usize + 4);
                     if hlit > 286 || hdist > 30 {
-                        return Err(bad("too many codes"));
+                        return Err(bad(winrust_common::pt!("too many codes")));
                     }
                     let mut cl = [0u8; 19];
                     for &o in &CL_ORDER[..hclen] {
@@ -682,12 +682,12 @@ pub fn inflate<R: Read, W: Write>(r: R, w: &mut W, progress: &mut dyn FnMut(u64)
                         let s = ct.sym(&mut b)?;
                         let (v, rep) = match s {
                             0..=15 => (s as u8, 1),
-                            16 => (*lens[..i].last().ok_or_else(|| bad("repeat with nothing before"))?, 3 + b.bits(2)? as usize),
+                            16 => (*lens[..i].last().ok_or_else(|| bad(winrust_common::pt!("repeat with nothing before")))?, 3 + b.bits(2)? as usize),
                             17 => (0, 3 + b.bits(3)? as usize),
                             _ => (0, 11 + b.bits(7)? as usize),
                         };
                         if i + rep > lens.len() {
-                            return Err(bad("code lengths overrun"));
+                            return Err(bad(winrust_common::pt!("code lengths overrun")));
                         }
                         lens[i..i + rep].fill(v);
                         i += rep;
@@ -704,16 +704,16 @@ pub fn inflate<R: Read, W: Write>(r: R, w: &mut W, progress: &mut dyn FnMut(u64)
                     } else {
                         let c = s - 257;
                         if c >= 29 {
-                            return Err(bad("bad length code"));
+                            return Err(bad(winrust_common::pt!("bad length code")));
                         }
                         let len = LBASE[c] as usize + b.bits(LEXT[c] as u32)? as usize;
                         let d = dt.sym(&mut b)?;
                         if d >= 30 {
-                            return Err(bad("bad distance code"));
+                            return Err(bad(winrust_common::pt!("bad distance code")));
                         }
                         let dist = DBASE[d] as usize + b.bits(DEXT[d] as u32)? as usize;
                         if dist > out.len() {
-                            return Err(bad("distance reaches before the start"));
+                            return Err(bad(winrust_common::pt!("distance reaches before the start")));
                         }
                         let from = out.len() - dist;
                         if dist >= len {
@@ -729,7 +729,7 @@ pub fn inflate<R: Read, W: Write>(r: R, w: &mut W, progress: &mut dyn FnMut(u64)
                     }
                 }
             }
-            _ => return Err(bad("bad block type")),
+            _ => return Err(bad(winrust_common::pt!("bad block type"))),
         }
         if last {
             break;
@@ -1071,7 +1071,7 @@ fn central_directory<F: Read + Seek>(f: &mut F) -> io::Result<Vec<Entry>> {
     let end = f.seek(SeekFrom::End(0))?;
     let tail_len = end.min(22 + 65535);
     let tail = read_at(f, end - tail_len, tail_len as usize)?;
-    let at = (0..tail.len().saturating_sub(21)).rev().find(|&i| u32_at(&tail, i) == 0x0605_4b50).ok_or_else(|| bad("not a ZIP archive"))?;
+    let at = (0..tail.len().saturating_sub(21)).rev().find(|&i| u32_at(&tail, i) == 0x0605_4b50).ok_or_else(|| bad(winrust_common::pt!("not a ZIP archive")))?;
     let eocd = end - tail_len + at as u64;
     let (mut count, mut size, mut start) = (u16_at(&tail, at + 10) as u64, u32_at(&tail, at + 12) as u64, u32_at(&tail, at + 16) as u64);
     if (count == 0xFFFF || size == U32_MAX || start == U32_MAX) && eocd >= 20 {
@@ -1085,18 +1085,18 @@ fn central_directory<F: Read + Seek>(f: &mut F) -> io::Result<Vec<Entry>> {
         }
     }
     if size > 1 << 30 {
-        return Err(bad("central directory is too big"));
+        return Err(bad(winrust_common::pt!("central directory is too big")));
     }
     let cd = read_at(f, start, size as usize)?;
     let (mut v, mut i) = (vec![], 0usize);
     for _ in 0..count {
         if i + 46 > cd.len() || u32_at(&cd, i) != 0x0201_4b50 {
-            return Err(bad("broken central directory"));
+            return Err(bad(winrust_common::pt!("broken central directory")));
         }
         let (flags, method) = (u16_at(&cd, i + 8), u16_at(&cd, i + 10));
         let (nl, el, cl) = (u16_at(&cd, i + 28) as usize, u16_at(&cd, i + 30) as usize, u16_at(&cd, i + 32) as usize);
         if i + 46 + nl + el + cl > cd.len() {
-            return Err(bad("broken central directory"));
+            return Err(bad(winrust_common::pt!("broken central directory")));
         }
         let mut e = Entry {
             name: decode_name(&cd[i + 46..i + 46 + nl], flags),
@@ -1152,8 +1152,8 @@ fn safe_path(out: &Path, name: &str) -> Result<Option<PathBuf>, String> {
     for c in name.replace('\\', "/").split('/') {
         match c {
             "" | "." => continue,
-            ".." => return Err(format!("{name}: the name leads out of the folder")),
-            _ if Path::new(c).components().any(|k| !matches!(k, Component::Normal(_))) || c.contains(':') => return Err(format!("{name}: bad name")),
+            ".." => return Err(winrust_common::pf!("{name}: the name leads out of the folder", "{name}: o nome sai da pasta")),
+            _ if Path::new(c).components().any(|k| !matches!(k, Component::Normal(_))) || c.contains(':') => return Err(winrust_common::pf!("{name}: bad name", "{name}: nome ruim")),
             _ => {
                 p.push(c);
                 any = true;
@@ -1245,12 +1245,12 @@ fn extract_where(archive: &Path, out: &Path, pick: impl Fn(&str) -> Option<Strin
             continue;
         }
         if e.flags & 1 != 0 {
-            return Err(format!("{}: encrypted entries are not supported", e.name));
+            return Err(winrust_common::pf!("{}: encrypted entries are not supported", "{}: entradas criptografadas não são suportadas", e.name));
         }
         let ctx = |x: io::Error| if x.kind() == io::ErrorKind::Interrupted { "cancelled".to_string() } else { format!("{}: {x}", e.name) };
         let lh = read_at(&mut f, e.offset, 30).map_err(ctx)?;
         if u32_at(&lh, 0) != 0x0403_4b50 {
-            return Err(format!("{}: broken local header", e.name));
+            return Err(winrust_common::pf!("{}: broken local header", "{}: cabeçalho local quebrado", e.name));
         }
         let data = e.offset + 30 + u16_at(&lh, 26) as u64 + u16_at(&lh, 28) as u64;
         f.seek(SeekFrom::Start(data)).map_err(ctx)?;
@@ -1278,7 +1278,7 @@ fn extract_where(archive: &Path, out: &Path, pick: impl Fn(&str) -> Option<Strin
                 (crc, n)
             }
             8 => inflate(src, &mut w, &mut step).map_err(ctx)?,
-            m => return Err(format!("{}: compression method {m} is not supported", e.name)),
+            m => return Err(winrust_common::pf!("{}: compression method {m} is not supported", "{}: o método de compactação {m} não é compatível", e.name)),
         };
         let file = w.into_inner().map_err(|x| ctx(x.into_error()))?;
         if let Some(t) = from_dos(e.time) {
@@ -1286,7 +1286,7 @@ fn extract_where(archive: &Path, out: &Path, pick: impl Fn(&str) -> Option<Strin
         }
         drop(file);
         if crc != e.crc || size != e.usize {
-            return Err(format!("{}: the data is damaged (checksum or size differs)", e.name));
+            return Err(winrust_common::pf!("{}: the data is damaged (checksum or size differs)", "{}: os dados estão danificados (soma de verificação ou tamanho diferente)", e.name));
         }
     }
     for (p, t) in dirs.into_iter().rev().filter_map(|(p, t)| Some((p, t?))) {

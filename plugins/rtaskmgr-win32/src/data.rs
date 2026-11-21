@@ -462,12 +462,12 @@ impl Data {
                         match rule.act {
                             RuleAct::Lower => {
                                 if sys::priority_name(p.pid) != sys::PRIORITIES[1].0 && sys::set_priority(p.pid, sys::PRIORITIES[1].1) {
-                                    notes.push(tf!("Правило: «{}» (PID {}) грузил ЦП > {:.0}% — приоритет понижен", "Rule: '{}' (PID {}) used CPU > {:.0}% - priority lowered", p.name, p.pid, rule.cpu));
+                                    notes.push(tf!("Правило: «{}» (PID {}) грузил ЦП > {:.0}% — приоритет понижен", "Rule: '{}' (PID {}) used CPU > {:.0}% - priority lowered", "Regra: '{}' (PID {}) usou CPU > {:.0}% - prioridade reduzida", p.name, p.pid, rule.cpu));
                                     self.rules[ri].hits += 1;
                                 }
                             }
                             RuleAct::Notify => {
-                                notes.push(tf!("«{}» (PID {}) грузит ЦП больше {:.0}% уже {} с", "'{}' (PID {}) has used more than {:.0}% CPU for {} s", p.name, p.pid, rule.cpu, rule.secs));
+                                notes.push(tf!("«{}» (PID {}) грузит ЦП больше {:.0}% уже {} с", "'{}' (PID {}) has used more than {:.0}% CPU for {} s", "'{}' (PID {}) usou mais de {:.0}% CPU para {} s", p.name, p.pid, rule.cpu, rule.secs));
                                 self.rules[ri].hits += 1;
                             }
                         }
@@ -511,18 +511,18 @@ impl Data {
         for p in &self.procs {
             groups.entry(group_key(&p.name)).or_default().push(p);
         }
-        let disp = |g: &[&Proc]| if g.len() > 1 { tf!("{} ({} шт.)", "{} ({} pcs)", g[0].name, g.len()) } else { g[0].name.clone() };
+        let disp = |g: &[&Proc]| if g.len() > 1 { tf!("{} ({} шт.)", "{} ({} pcs)", "{} (unidades {})", g[0].name, g.len()) } else { g[0].name.clone() };
         let avg = |g: &Vec<&Proc>| g.iter().map(|p| p.avg).sum::<f32>();
         let mut gs: Vec<&Vec<&Proc>> = groups.values().collect();
         gs.sort_by(|a, b| avg(b).total_cmp(&avg(a)));
         for g in gs.iter().take(3) {
             let (a, now): (f32, f32) = (avg(g), g.iter().map(|p| p.cpu).sum());
             if a >= 8.0 {
-                let mut t = tf!("ЦП: «{}» занимает в среднем {a:.0}% за последние 30 с (сейчас {now:.0}%).", "CPU: '{}' averages {a:.0}% over the last 30 s (now {now:.0}%).", disp(g));
+                let mut t = tf!("ЦП: «{}» занимает в среднем {a:.0}% за последние 30 с (сейчас {now:.0}%).", "CPU: '{}' averages {a:.0}% over the last 30 s (now {now:.0}%).", "CPU: '{}' tem média de {a:.0}% nos últimos 30 s (agora {now:.0}%).", disp(g));
                 if g[0].name.eq_ignore_ascii_case("svchost.exe") {
                     let top = g.iter().max_by(|x, y| x.avg.total_cmp(&y.avg)).unwrap();
                     if let Some(s) = self.svc_pids.get(&top.pid) {
-                        t += &tf!(" Самый занятый svchost (PID {}) держит службы: {}.", " The busiest svchost (PID {}) hosts services: {}.", top.pid, s.iter().take(5).cloned().collect::<Vec<_>>().join(", "));
+                        t += &tf!(" Самый занятый svchost (PID {}) держит службы: {}.", " The busiest svchost (PID {}) hosts services: {}.", " O svchost mais ocupado (PID {}) hospeda serviços: {}.", top.pid, s.iter().take(5).cloned().collect::<Vec<_>>().join(", "));
                     }
                 }
                 out.push(t);
@@ -531,48 +531,48 @@ impl Data {
         if self.mem_pct >= 80.0 {
             gs.sort_by_key(|g| std::cmp::Reverse(g.iter().map(|p| p.mem).sum::<u64>()));
             let top: Vec<String> = gs.iter().take(3).map(|g| format!("{} — {}", disp(g), crate::ui::fmt_mem(g.iter().map(|p| p.mem).sum()))).collect();
-            out.push(tf!("Память занята на {:.0}%. Больше всего у: {}.", "Memory is {:.0}% used. Biggest users: {}.", self.mem_pct, top.join("; ")));
+            out.push(tf!("Память занята на {:.0}%. Больше всего у: {}.", "Memory is {:.0}% used. Biggest users: {}.", "A memória é {:.0}% usada. Maiores usuários: {}.", self.mem_pct, top.join("; ")));
         }
         let io = self.sample.disk_read + self.sample.disk_write;
         if io > 150.0 * 1_048_576.0 || self.sample.disk_active > 90.0 {
-            out.push(tf!("Диск загружен на {:.0}% (чтение+запись {:.0} МБ/с).", "Disk is {:.0}% busy (read+write {:.0} MB/s).", self.sample.disk_active, io / 1_048_576.0));
+            out.push(tf!("Диск загружен на {:.0}% (чтение+запись {:.0} МБ/с).", "Disk is {:.0}% busy (read+write {:.0} MB/s).", "O disco está {:.0}% ocupado (leitura+gravação {:.0} MB/s).", self.sample.disk_active, io / 1_048_576.0));
         }
         if self.etw.is_some() {
             gs.sort_by(|a, b| b.iter().map(|p| p.net).sum::<f64>().total_cmp(&a.iter().map(|p| p.net).sum::<f64>()));
             if let Some(g) = gs.first() {
                 let n: f64 = g.iter().map(|p| p.net).sum();
                 if n > 1_000_000.0 {
-                    out.push(tf!("Сеть: «{}» передаёт {:.1} МБ/с — больше всех остальных.", "Network: '{}' moves {:.1} MB/s - more than any other.", disp(g), n / 1e6));
+                    out.push(tf!("Сеть: «{}» передаёт {:.1} МБ/с — больше всех остальных.", "Network: '{}' moves {:.1} MB/s - more than any other.", "Rede: '{}' movimenta {:.1} MB/s - mais do que qualquer outro.", disp(g), n / 1e6));
                 }
             }
         }
         let high: Vec<String> = gs.iter().filter(|g| g.iter().any(|p| p.reasons.iter().any(|r| r.sev == 3))).map(|g| disp(g)).take(5).collect();
         if !high.is_empty() {
-            out.push(tf!("Подозрительные процессы (высокая степень): {}. Наведите курсор на метку в колонке «Подозрительное» — там причина.", "Suspicious processes (high severity): {}. Hover the label in the 'Suspicious' column to see the reason.", high.join(", ")));
+            out.push(tf!("Подозрительные процессы (высокая степень): {}. Наведите курсор на метку в колонке «Подозрительное» — там причина.", "Suspicious processes (high severity): {}. Hover the label in the 'Suspicious' column to see the reason.", "Processos suspeitos (alta gravidade): {}. Passe o mouse sobre o rótulo na coluna “Suspeito” para ver o motivo.", high.join(", ")));
         }
         if self.cpu_total > 90.0 {
             out.push(t!("ЦП почти полностью занят — отсортируйте процессы по ЦП, чтобы увидеть виновника.", "CPU is almost fully used - sort processes by CPU to see the culprit.").into());
         }
         for (pid, title) in &self.hung {
             let name = self.procs.iter().find(|p| p.pid == *pid).map_or_else(|| format!("PID {pid}"), |p| p.name.clone());
-            out.push(tf!("Не отвечает: «{title}» ({name}). Окно зависло: подождите или снимите задачу на странице «Процессы».", "Not responding: '{title}' ({name}). The window hangs: wait or end the task on the 'Processes' page."));
+            out.push(tf!("Не отвечает: «{title}» ({name}). Окно зависло: подождите или снимите задачу на странице «Процессы».", "Not responding: '{title}' ({name}). The window hangs: wait or end the task on the 'Processes' page.", "Não respondendo: '{title}' ({name}). A janela trava: aguarde ou encerre a tarefa na página ‘Processos’."));
         }
         let drv = self.dpc_pct + self.intr_pct;
         if drv >= 5.0 {
-            out.push(tf!("Драйверы заняли {:.1}% времени ЦП (DPC {:.1}%, прерывания {:.1}%; норма — до 2%). Так выглядит «драйвер тормозит систему»: трещит звук, дёргается мышь, проседают кадры. Чаще всего виноваты Wi-Fi/сеть, звук, видеодрайвер или USB: обновите их или отключайте по очереди в диспетчере устройств.", "Drivers took {:.1}% of CPU time (DPC {:.1}%, interrupts {:.1}%; normal is under 2%). This is what 'a driver slows the system down' looks like: crackling audio, jerky mouse, frame drops. Usually Wi-Fi/network, audio, graphics or USB drivers: update them or disable them one by one in Device Manager.", drv, self.dpc_pct, self.intr_pct));
+            out.push(tf!("Драйверы заняли {:.1}% времени ЦП (DPC {:.1}%, прерывания {:.1}%; норма — до 2%). Так выглядит «драйвер тормозит систему»: трещит звук, дёргается мышь, проседают кадры. Чаще всего виноваты Wi-Fi/сеть, звук, видеодрайвер или USB: обновите их или отключайте по очереди в диспетчере устройств.", "Drivers took {:.1}% of CPU time (DPC {:.1}%, interrupts {:.1}%; normal is under 2%). This is what 'a driver slows the system down' looks like: crackling audio, jerky mouse, frame drops. Usually Wi-Fi/network, audio, graphics or USB drivers: update them or disable them one by one in Device Manager.", "Os drivers consumiram {:.1}% do tempo da CPU (DPC {:.1}%, interrompe {:.1}%; o normal é inferior a 2%). É assim que se parece 'um driver desacelera o sistema': áudio crepitante, mouse trêmulo, queda de quadros. Normalmente drivers de Wi-Fi/rede, áudio, gráficos ou USB: atualize-os ou desative-os um por um no Gerenciador de Dispositivos.", drv, self.dpc_pct, self.intr_pct));
         }
         if self.sample.disk_ms > 50.0 && self.sample.disk_active > 50.0 {
-            out.push(tf!("Диск отвечает медленно: {:.0} мс на запрос при загрузке {:.0}% (у SSD норма — единицы мс). Если это HDD, программы и игры с него будут грузиться долго; если SSD — проверьте его здоровье и свободное место.", "The disk responds slowly: {:.0} ms per request at {:.0}% busy (an SSD normally takes a few ms). On an HDD apps and games load slowly; on an SSD check its health and free space.", self.sample.disk_ms, self.sample.disk_active));
+            out.push(tf!("Диск отвечает медленно: {:.0} мс на запрос при загрузке {:.0}% (у SSD норма — единицы мс). Если это HDD, программы и игры с него будут грузиться долго; если SSD — проверьте его здоровье и свободное место.", "The disk responds slowly: {:.0} ms per request at {:.0}% busy (an SSD normally takes a few ms). On an HDD apps and games load slowly; on an SSD check its health and free space.", "O disco responde lentamente: {:.0} ms por solicitação em {:.0}% ocupado (um SSD normalmente leva alguns ms). Em um HDD, aplicativos e jogos carregam lentamente; em um SSD, verifique sua integridade e espaço livre.", self.sample.disk_ms, self.sample.disk_active));
         }
         let total = self.sys.total_memory();
         if total > 0 && self.sample.mem_free < total / 20 && self.sample.mem_standby > 1 << 30 {
-            out.push(tf!("Свободной памяти почти нет ({}), а кэш (standby) занимает {}. В играх это даёт рывки: включите «Очистить кэш памяти» на странице «Ускорение».", "Almost no free memory ({}) while the standby cache holds {}. In games this shows as stutter: use 'Clear memory cache' on the 'Speed' page.", crate::ui::fmt_mem(self.sample.mem_free), crate::ui::fmt_mem(self.sample.mem_standby)));
+            out.push(tf!("Свободной памяти почти нет ({}), а кэш (standby) занимает {}. В играх это даёт рывки: включите «Очистить кэш памяти» на странице «Ускорение».", "Almost no free memory ({}) while the standby cache holds {}. In games this shows as stutter: use 'Clear memory cache' on the 'Speed' page.", "Quase nenhuma memória livre ({}) enquanto o cache de espera contém {}. Nos jogos, isso aparece como uma falha: use 'Limpar cache de memória' na página 'Velocidade'.", crate::ui::fmt_mem(self.sample.mem_free), crate::ui::fmt_mem(self.sample.mem_standby)));
         }
         if out.is_empty() {
             out.push(t!("Всё в порядке: ни один процесс не потребляет заметно больше обычного.", "All good: no process uses noticeably more than usual.").into());
         }
         if self.cpu_times.is_some() && drv < 5.0 {
-            out.push(tf!("Драйверы в норме: DPC {:.1}%, прерывания {:.1}% времени ЦП.", "Drivers are fine: DPC {:.1}%, interrupts {:.1}% of CPU time.", self.dpc_pct, self.intr_pct));
+            out.push(tf!("Драйверы в норме: DPC {:.1}%, прерывания {:.1}% времени ЦП.", "Drivers are fine: DPC {:.1}%, interrupts {:.1}% of CPU time.", "Os drivers estão bem: DPC {:.1}%, interrompe {:.1}% do tempo da CPU.", self.dpc_pct, self.intr_pct));
         }
         if self.is_admin {
             out.extend(boot_hint(crate::startup::boot_log()));
@@ -586,13 +586,13 @@ pub fn boot_hint(log: &crate::startup::BootLog) -> Option<String> {
     let s = |ms: u32| crate::model::dec(ms as f64 / 1000.0, 0);
     let first = log.boots.first()?;
     let times: Vec<String> = log.boots.iter().take(5).map(|b| s(b.1)).collect();
-    let mut t = tf!("Загрузка Windows: последняя {} с ({}), до рабочего стола {} с. Предыдущие: {} с.", "Windows boot: last {} s ({}), {} s to the desktop. Before that: {} s.", s(first.1), first.0, s(first.2), times[1..].join(", "));
+    let mut t = tf!("Загрузка Windows: последняя {} с ({}), до рабочего стола {} с. Предыдущие: {} с.", "Windows boot: last {} s ({}), {} s to the desktop. Before that: {} s.", "Inicialização do Windows: últimos {} s ({}), {} s para a área de trabalho. Antes disso: {} s.", s(first.1), first.0, s(first.2), times[1..].join(", "));
     if times.len() == 1 {
-        t = tf!("Загрузка Windows: {} с ({}), до рабочего стола {} с.", "Windows boot: {} s ({}), {} s to the desktop.", s(first.1), first.0, s(first.2));
+        t = tf!("Загрузка Windows: {} с ({}), до рабочего стола {} с.", "Windows boot: {} s ({}), {} s to the desktop.", "Inicialização do Windows: {} s ({}), {} s para a área de trabalho.", s(first.1), first.0, s(first.2));
     }
     let slow: Vec<String> = log.slow.iter().take(5).map(|x| format!("{} (+{} с)", if x.1.is_empty() { &x.0 } else { &x.1 }, crate::model::dec(x.2 as f64 / 1000.0, 1))).collect();
     if !slow.is_empty() {
-        t += &tf!(" Больше всего замедляли: {}. Отключить можно на странице «Автозагрузка» (колонка «Замедляет загрузку»).", " The worst slowdowns: {}. Disable them on the 'Startup' page ('Slows boot by' column).", slow.join(", "));
+        t += &tf!(" Больше всего замедляли: {}. Отключить можно на странице «Автозагрузка» (колонка «Замедляет загрузку»).", " The worst slowdowns: {}. Disable them on the 'Startup' page ('Slows boot by' column).", " As piores lentidão: {}. Desative-os na página 'Inicialização' (coluna 'Retarda a inicialização por').", slow.join(", "));
     }
     Some(t)
 }

@@ -481,7 +481,7 @@ unsafe extern "system" fn fly_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 }
             });
             if tip.is_empty() {
-                tip = if over.is_empty() { "No more icons".into() } else { "Middle click: move to the bar".into() };
+                tip = if over.is_empty() { winrust_common::pt!("No more icons").into() } else { winrust_common::pt!("Middle click: move to the bar").into() };
             }
             let mut tr = RECT { left: sc(10), top: r.bottom - sc(26), right: r.right - sc(10), bottom: r.bottom - sc(4) };
             DrawTextW(dc, wide(&tip).as_ptr(), -1, &mut tr, DT_LEFT | DT_NOPREFIX | DT_SINGLELINE | DT_END_ELLIPSIS | DT_VCENTER);
@@ -569,9 +569,9 @@ unsafe extern "system" fn tip_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
 /// Tooltip text of a bar element ("" = none).
 unsafe fn tip_text(h: i32) -> String {
     match h {
-        SEARCH => "Search".into(),
-        0 => "Start".into(),
-        TAPP => "Hidden icons".into(),
+        SEARCH => winrust_common::pt!("Search").into(),
+        0 => winrust_common::pt!("Start").into(),
+        TAPP => winrust_common::pt!("Hidden icons").into(),
         GEAR => t!("Стиль", "Style").into(),
         CLOCK => {
             let mut t: SYSTEMTIME = zeroed();
@@ -580,16 +580,16 @@ unsafe fn tip_text(h: i32) -> String {
             let n = GetDateFormatW(0x0400, 2, &t, null(), b.as_mut_ptr(), 80).max(1) as usize - 1; // DATE_LONGDATE
             String::from_utf16_lossy(&b[..n])
         }
-        LANG => tf!("Язык ввода: {}", "Input language: {}", layout_names(layouts().1).0),
+        LANG => tf!("Язык ввода: {}", "Input language: {}", "Idioma de entrada: {}", layout_names(layouts().1).0),
         WIFI_I => match net() {
-            Link::Wifi(q) => tf!("Wi‑Fi · сигнал {q}%", "Wi‑Fi · signal {q}%"),
+            Link::Wifi(q) => tf!("Wi‑Fi · сигнал {q}%", "Wi‑Fi · signal {q}%", "Wi‑Fi · sinal {q}%"),
             Link::NoInternet(_) => t!("Wi‑Fi подключён, но интернета нет", "Wi‑Fi connected, no internet").into(),
             Link::Cable => t!("Интернет по кабелю", "Internet over a cable").into(),
             Link::Offline => t!("Нет подключения к сети", "Not connected").into(),
         },
         VOL_I => vol_tip(),
         BAT_I => match BAT.get() {
-            (p, ac) if p >= 0 => format!("Battery {p}%{}", if ac { " · plugged in" } else { "" }),
+            (p, ac) if p >= 0 => winrust_common::pf!("Battery {p}%{}", "Bateria {p}%{}", if ac { winrust_common::pt!(" · plugged in") } else { "" }),
             _ => String::new(),
         },
         t if t > TAPP && t < TAPP + 100 => bar_idx().get((t - TAPP - 1) as usize).and_then(|&i| TAPPS.with_borrow(|t| t.get(i).map(|i| i.tip.clone()))).unwrap_or_default(),
@@ -614,7 +614,7 @@ unsafe fn tip_text(h: i32) -> String {
 fn vol_tip() -> String {
     match VOL.get() {
         (v, false) if v >= 0 => format!("Volume {v}%"),
-        (_, true) => "Muted".into(),
+        (_, true) => winrust_common::pt!("Muted").into(),
         _ => "Volume".into(),
     }
 }
@@ -1791,14 +1791,14 @@ unsafe fn save_bitmap(bmp: HBITMAP) -> Option<String> {
 unsafe fn clip_notice(bar: HWND) {
     let name = clip::DONE.lock().ok().and_then(|mut d| d.take()).unwrap_or_default();
     KillTimer(bar, 2);
-    show_tip(tf!("Фрагмент сохранён: {name}\nи скопирован в буфер обмена", "Snip saved: {name}\nand copied to the clipboard"), GetSystemMetrics(SM_CXSCREEN) / 2);
+    show_tip(tf!("Фрагмент сохранён: {name}\nи скопирован в буфер обмена", "Snip saved: {name}\nand copied to the clipboard", "Recorte salvo: {name}\n e copiado para a área de transferência"), GetSystemMetrics(SM_CXSCREEN) / 2);
     SetTimer(bar, 6, 2500, None);
 }
 
 /// PrtSc pressed: take the screenshot, then say so above the bar for a moment.
 unsafe fn screenshot_notice(bar: HWND) {
     let msg = match screenshot() {
-        Some(n) => tf!("Скриншот сохранён: {n}\nи скопирован в буфер обмена", "Screenshot saved: {n}\nand copied to the clipboard"),
+        Some(n) => tf!("Скриншот сохранён: {n}\nи скопирован в буфер обмена", "Screenshot saved: {n}\nand copied to the clipboard", "Captura de tela salva: {n}\n e copiada para a área de transferência"),
         None => t!("Не удалось сделать скриншот", "Could not take a screenshot").to_string(),
     };
     KillTimer(bar, 2);
@@ -2250,10 +2250,10 @@ fn wstr_of(w: &[u16]) -> String {
     String::from_utf16_lossy(&w[..w.iter().position(|&c| c == 0).unwrap_or(w.len())])
 }
 
-/// "1 окно", "3 окна", "5 окон".
+/// Window count with the plural for the interface language.
 fn windows_ru(n: usize) -> String {
-    if en!() {
-        return format!("{n} {}", if n == 1 { "window" } else { "windows" });
+    if lang!() != i18n::locale::Language::Russian {
+        return format!("{n} {}", if n == 1 { winrust_common::pt!("window") } else { winrust_common::pt!("windows") });
     }
     let w = match (n % 10, n % 100) {
         (1, x) if x != 11 => "окно",
@@ -2283,8 +2283,8 @@ unsafe fn app_menu(hwnd: HWND, h: i32) {
     let name: String = stem.chars().take(1).flat_map(char::to_uppercase).chain(stem.chars().skip(1)).collect();
     let sub = match (wins.len(), pin.is_some()) {
         (0, _) => t!("Закреплено · не запущено", "Pinned · not running").to_string(),
-        (n, true) => tf!("Закреплено · {}", "Pinned · {}", windows_ru(n)),
-        (n, false) => tf!("Запущено · {}", "Running · {}", windows_ru(n)),
+        (n, true) => tf!("Закреплено · {}", "Pinned · {}", "Fixado · {}", windows_ru(n)),
+        (n, false) => tf!("Запущено · {}", "Running · {}", "Correndo · {}", windows_ru(n)),
     };
     let icon = if picon.is_null() { bicon } else { picon };
     let mut items: Vec<(fly::MItem, A)> = Vec::new();
@@ -2420,9 +2420,9 @@ unsafe fn on_drop(hwnd: HWND, hd: HDROP) {
             fly::toggle(fly::Kind::Start);
         }
         fly::note(&match added.len() {
-            0 => "Already in Start".to_string(),
-            1 => format!("Added to Start: {}", name(added[0])),
-            n => format!("Added {n} items to Start"),
+            0 => winrust_common::pt!("Already in Start").to_string(),
+            1 => winrust_common::pf!("Added to Start: {}", "Adicionado ao menu Iniciar: {}", name(added[0])),
+            n => winrust_common::pf!("Added {n} items to Start", "{n} itens adicionados ao menu Iniciar"),
         });
     } else {
         files.iter().for_each(|f| pin_exe(f));

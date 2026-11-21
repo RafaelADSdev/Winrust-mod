@@ -382,10 +382,10 @@ fn night_labels() -> Vec<String> {
         .iter()
         .map(|&k| match k {
             0 => t!("Выкл.", "Off").to_string(),
-            5500 => tf!("Слабый · {} K", "Low · {} K", k),
-            4800 => tf!("Средний · {} K", "Medium · {} K", k),
-            4200 => tf!("Сильный · {} K", "Strong · {} K", k),
-            _ => tf!("Максимальный · {} K", "Maximum · {} K", k),
+            5500 => tf!("Слабый · {} K", "Low · {} K", "Baixo · {} K", k),
+            4800 => tf!("Средний · {} K", "Medium · {} K", "Médio · {} K", k),
+            4200 => tf!("Сильный · {} K", "Strong · {} K", "Forte · {} K", k),
+            _ => tf!("Максимальный · {} K", "Maximum · {} K", "Máximo · {} K", k),
         })
         .collect()
 }
@@ -460,7 +460,7 @@ fn wifi_note(n: &wifi::Net) -> String {
                 Wpa3 => "WPA3",
                 _ => "WPA2",
             };
-            tf!("Защищена  ·  {}", "Secured  ·  {}", kind)
+            tf!("Защищена  ·  {}", "Secured  ·  {}", "Protegido · {}", kind)
         }
     }
 }
@@ -568,7 +568,7 @@ fn power_rows() -> Vec<Row> {
             head(t!("Хранилище", "Storage")),
             toggle_row(t!("Контроль памяти (автоочистка)", "Storage Sense (auto cleanup)"), STORAGE_SENSE, "01", 1, 0),
         ],
-        power::drives().into_iter().map(|(l, free, total)| Row::Info(tf!("Диск {}:", "Drive {}:", l), tf!("{} свободно из {}", "{} free of {}", power::size(free), power::size(total)))).collect(),
+        power::drives().into_iter().map(|(l, free, total)| Row::Info(tf!("Диск {}:", "Drive {}:", "Unidade {}:", l), tf!("{} свободно из {}", "{} free of {}", "{} livre de {}", power::size(free), power::size(total)))).collect(),
         vec![
             head(t!("Очистка диска", "Disk cleanup")),
             Row::Item(t!("Временные файлы (старше суток)", "Temporary files (older than a day)").into(), ext::temp_text(), Cmd::CleanTemp),
@@ -604,7 +604,7 @@ fn bt_rows() -> Vec<Row> {
 }
 
 fn apps_rows(list: &[ext::App]) -> Vec<Row> {
-    let mut rows = vec![Row::Header(tf!("Установленные программы: {}", "Installed programs: {}", list.len()))];
+    let mut rows = vec![Row::Header(tf!("Установленные программы: {}", "Installed programs: {}", "Programas instalados: {}", list.len()))];
     rows.extend(list.iter().take(400).map(|a| Row::Item(a.name.clone(), a.version.clone(), Cmd::Uninstall(a.uninstall.clone()))));
     rows
 }
@@ -615,7 +615,7 @@ fn wu_rows() -> Vec<Row> {
         (Some(b), _) => b.clone(),
         (_, None) => t!("Ещё не проверялось", "Not checked yet").into(),
         (_, Some(f)) if f.is_empty() => t!("Всё установлено", "Up to date").into(),
-        (_, Some(f)) => tf!("Доступно обновлений: {}", "Updates available: {}", f.len()),
+        (_, Some(f)) => tf!("Доступно обновлений: {}", "Updates available: {}", "Atualizações disponíveis: {}", f.len()),
     };
     let mut rows = vec![Row::Header(t!("Центр обновления Windows", "Windows Update").into()), Row::Info(t!("Состояние", "Status").into(), status)];
     if !s.note.is_empty() {
@@ -1108,7 +1108,7 @@ unsafe fn paint(hwnd: HWND) {
             let rad = rd(14) * 2;
             if a.pending > 0 {
                 shape(mem, r, t.accent, rad);
-                let msg = tf!("Оставить этот режим? Enter: оставить, Esc или {} с: вернуть", "Keep this mode? Enter keeps it, Esc or {} s goes back", a.pending);
+                let msg = tf!("Оставить этот режим? Enter: оставить, Esc или {} с: вернуть", "Keep this mode? Enter keeps it, Esc or {} s goes back", "Manter este modo? Enter mantém, Esc ou {} volta", a.pending);
                 text(mem, body, &msg, RECT { left: r.left + p(18), right: r.right - p(18), ..r }, rgb(255, 255, 255), DT_LEFT);
             } else if let Some(pr) = &a.prompt {
                 shape(mem, r, t.sep, rad);
@@ -1119,10 +1119,10 @@ unsafe fn paint(hwnd: HWND) {
                     Prompt::Ssid => t!("Имя скрытой сети", "Hidden network name").into(),
                     Prompt::Proxy(false) => t!("Прокси: адрес:порт (пусто: убрать)", "Proxy: host:port (empty: remove)").into(),
                     Prompt::Proxy(true) => t!("Адрес скрипта PAC (пусто: убрать)", "PAC script address (empty: remove)").into(),
-                    Prompt::EapUser(n) => tf!("Имя пользователя для «{}» (домен\\имя)", "User name for \"{}\" (domain\\name)", n.ssid),
-                    Prompt::EapPass(n, _) => tf!("Пароль «{}»", "Password for \"{}\"", n.ssid),
-                    Prompt::Key(n, true) => tf!("Пароль «{}» (пусто: открытая)", "Password for \"{}\" (empty: open)", n.ssid),
-                    Prompt::Key(n, false) => tf!("Пароль «{}»", "Password for \"{}\"", n.ssid),
+                    Prompt::EapUser(n) => tf!("Имя пользователя для «{}» (домен\\имя)", "User name for \"{}\" (domain\\name)", "Nome de usuário para \"{}\" (domínio\\nome)", n.ssid),
+                    Prompt::EapPass(n, _) => tf!("Пароль «{}»", "Password for \"{}\"", "Senha para \"{}\"", n.ssid),
+                    Prompt::Key(n, true) => tf!("Пароль «{}» (пусто: открытая)", "Password for \"{}\" (empty: open)", "Senha para \"{}\" (vazia: aberta)", n.ssid),
+                    Prompt::Key(n, false) => tf!("Пароль «{}»", "Password for \"{}\"", "Senha para \"{}\"", n.ssid),
                 };
                 let label = a.msg.clone().unwrap_or(ask);
                 text(mem, body, &label, RECT { left: r.left + p(18), right: e.left - p(14), ..r }, if a.msg.is_some() { winrust_common::style::BAD } else { t.fg }, DT_LEFT);
@@ -1352,7 +1352,7 @@ unsafe fn run_cmd(hwnd: HWND, label: &str, cmd: Cmd) {
             // destructive ones need a second click on the same row
             Cmd::Uninstall(c) => {
                 if once_more(label) {
-                    say(if ext::uninstall(&c) { tf!("Запущено удаление «{}»", "Uninstalling \"{}\"", label) } else { tf!("Не удалось запустить удаление «{}»", "Could not start uninstalling \"{}\"", label) });
+                    say(if ext::uninstall(&c) { tf!("Запущено удаление «{}»", "Uninstalling \"{}\"", "Desinstalando \"{}\"", label) } else { tf!("Не удалось запустить удаление «{}»", "Could not start uninstalling \"{}\"", "Não foi possível iniciar a desinstalação de \"{}\"", label) });
                 }
             }
             Cmd::BtUnpair(id) => {
@@ -1368,11 +1368,11 @@ unsafe fn run_cmd(hwnd: HWND, label: &str, cmd: Cmd) {
                         if v.on {
                             std::thread::spawn(move || {
                                 ext::hang_up(&name);
-                                note(tf!("VPN «{}» отключён", "VPN \"{}\" disconnected", name));
+                                note(tf!("VPN «{}» отключён", "VPN \"{}\" disconnected", "VPN \"{}\" desconectada", name));
                             });
                         } else {
-                            say(tf!("Подключение к «{}»…", "Connecting to \"{}\"…", name));
-                            std::thread::spawn(move || note(ext::dial(&name, v.pbk.as_deref()).map_or_else(|e| e, |_| tf!("VPN «{}» подключён", "VPN \"{}\" connected", name))));
+                            say(tf!("Подключение к «{}»…", "Connecting to \"{}\"…", "Conectando a \"{}\"…", name));
+                            std::thread::spawn(move || note(ext::dial(&name, v.pbk.as_deref()).map_or_else(|e| e, |_| tf!("VPN «{}» подключён", "VPN \"{}\" connected", "VPN \"{}\" conectada", name))));
                         }
                     }
                     Cmd::CleanTemp => {
@@ -1510,7 +1510,7 @@ unsafe fn edit_text(ed: isize) -> String {
 unsafe fn start_wait(hwnd: HWND, ssid: String, profile: String, new: bool) {
     unsafe {
         APP.with_borrow_mut(|a| {
-            a.msg = Some(tf!("Подключение к «{}»…", "Connecting to \"{}\"…", ssid));
+            a.msg = Some(tf!("Подключение к «{}»…", "Connecting to \"{}\"…", "Conectando a \"{}\"…", ssid));
             a.connecting = Some((ssid, profile, new));
         });
         SetTimer(hwnd, 3, 30_000, None);
@@ -1690,7 +1690,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                             if new {
                                 wifi::forget(&prof); // a wrong password is not kept: the next click asks again
                             }
-                            tf!("Не удалось подключиться к «{}»: {}", "Could not connect to \"{}\": {}", ssid, wifi::reason_text(reason))
+                            tf!("Не удалось подключиться к «{}»: {}", "Could not connect to \"{}\": {}", "Não foi possível conectar a \"{}\": {}", ssid, wifi::reason_text(reason))
                         });
                         APP.with_borrow_mut(|a| a.msg = m);
                     }
@@ -1716,7 +1716,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             WM_TIMER if wp == 3 => {
                 KillTimer(hwnd, 3);
                 if let Some((ssid, ..)) = APP.with_borrow_mut(|a| a.connecting.take()) {
-                    APP.with_borrow_mut(|a| a.msg = Some(tf!("«{}» не ответила за 30 с", "\"{}\" did not answer in 30 s", ssid)));
+                    APP.with_borrow_mut(|a| a.msg = Some(tf!("«{}» не ответила за 30 с", "\"{}\" did not answer in 30 s", "\"{}\" não respondeu em 30 segundos", ssid)));
                     InvalidateRect(hwnd, null(), 0);
                 }
                 0

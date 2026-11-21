@@ -19,7 +19,7 @@ fn main() {
             hotkeys::run() // no args: started by the launcher/Run key
         }
         _ => {
-            eprintln!("usage: reshell saver on|off | hotkeys (default)");
+            eprintln!("{}", winrust_common::pf!("usage: reshell saver on|off | hotkeys (default)", "Uso: reshell saver on|off | hotkeys (padrão)"));
             2
         }
     };

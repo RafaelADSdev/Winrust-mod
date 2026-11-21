@@ -25,11 +25,11 @@ struct Row {
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
-    let mut sys = System::new().expect("cannot read system information");
+    let mut sys = System::new().expect(winrust_common::pt!("cannot read system information"));
     sys.refresh_processes(ProcessesToUpdate::All, true);
 
     if args.first().map(String::as_str) == Some("--kill") {
-        let Some(target) = args.get(1) else { return eprintln!("usage: rs-top --kill <pid|name>") };
+        let Some(target) = args.get(1) else { return eprintln!("{}", winrust_common::pf!("usage: rs-top --kill <pid|name>", "Uso: rs-top --kill <pid|nome>")) };
         let pid = target.parse::<u32>().ok();
         let victims: Vec<_> = sys
             .processes()
@@ -40,11 +40,11 @@ fn main() {
             })
             .collect();
         if victims.is_empty() {
-            return println!("no process matches {target}");
+            return println!("{}", winrust_common::pf!("no process matches {target}", "nenhum processo corresponde a {target}"));
         }
         for p in victims {
             let ok = p.kill();
-            println!("{} {} (pid {})", if ok { "killed" } else { "cannot kill (needs admin?)" }, p.name().to_string_lossy(), p.pid());
+            println!("{} {} (pid {})", if ok { winrust_common::pt!("killed") } else { winrust_common::pt!("cannot kill (needs admin?)") }, p.name().to_string_lossy(), p.pid());
         }
         return;
     }
@@ -79,8 +79,8 @@ fn main() {
     let n = args.iter().find_map(|a| a.parse::<usize>().ok()).unwrap_or(15);
 
     let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
-    println!("RAM {:.1} / {:.1} GB used\n", gb(sys.used_memory()), gb(sys.total_memory()));
-    println!("{:>5} {:>8}  {}", "CPU%", "MEM MB", "PROCESS");
+    println!("{}", winrust_common::pf!("RAM {:.1} / {:.1} GB used\n", "RAM {:.1} / {:.1} GB usada\n", gb(sys.used_memory()), gb(sys.total_memory())));
+    println!("{:>5} {:>8}  {}", winrust_common::pt!("CPU%"), "MEM MB", winrust_common::pt!("PROCESS"));
     for r in rows.iter().take(n) {
         let who = if r.count == 1 { format!("{} (pid {})", r.label, r.pid) } else { format!("{} x{}", r.label, r.count) };
         println!("{:>5.1} {:>8}  {}", r.cpu, r.mem >> 20, who);

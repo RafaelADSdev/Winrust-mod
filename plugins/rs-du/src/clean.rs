@@ -109,7 +109,7 @@ fn old_downloads() -> Option<Item> {
         let p = e.path();
         e.metadata().is_ok_and(|m| m.is_file() && quiet_for(&m, 90)) && p.extension().is_some_and(|x| EXT.contains(&x.to_string_lossy().to_lowercase().as_str()))
     }).map(|e| e.path()).collect();
-    Some(Item { risk: Risk::Ask, how: How::Quarantine, label: tf!("Старые установщики и архивы в «Загрузках» ({} шт., старше 90 дней)", "Old installers and archives in Downloads ({} items, older than 90 days)", paths.len()),
+    Some(Item { risk: Risk::Ask, how: How::Quarantine, label: tf!("Старые установщики и архивы в «Загрузках» ({} шт., старше 90 дней)", "Old installers and archives in Downloads ({} items, older than 90 days)", "Instaladores e arquivos antigos em Downloads (itens {}, com mais de 90 dias)", paths.len()),
         note: t!("Скорее всего, программы уже установлены.", "Most likely the programs are already installed."), paths, bytes: 0 })
 }
 
@@ -218,7 +218,7 @@ pub fn purge(drive: char, all: bool) {
     }
     save(&m, &keep);
     for d in subdirs(&qroot(drive), |_| true) { let _ = fs::remove_dir(d); } // only empty ones go
-    if freed > 0 { println!("quarantine emptied: {} freed", human(freed)); }
+    if freed > 0 { println!("{}", winrust_common::pf!("quarantine emptied: {} freed", "quarentena esvaziada: {} liberado", human(freed))); }
 }
 
 /// Puts quarantined items back where they were.
@@ -227,9 +227,9 @@ pub fn restore(drive: char) {
     let mut keep = vec![];
     for r in rows {
         if !r.2.exists() { continue; }
-        if r.1.exists() { println!("not restored (the place is taken): {}", r.1.display()); keep.push(r); continue; }
+        if r.1.exists() { println!("{}", winrust_common::pf!("not restored (the place is taken): {}", "não restaurado (o lugar está ocupado): {}", r.1.display())); keep.push(r); continue; }
         let moved = r.1.parent().is_some_and(|d| fs::create_dir_all(d).is_ok()) && fs::rename(&r.2, &r.1).is_ok();
-        println!("{} {}", if moved { "restored" } else { "FAILED" }, r.1.display());
+        println!("{} {}", if moved { winrust_common::pt!("restored") } else { winrust_common::pt!("FAILED") }, r.1.display());
         if !moved { keep.push(r); }
     }
     save(&m, &keep);
@@ -268,7 +268,7 @@ pub fn clean(recs: &HashMap<u32, Rec>, tot: &HashMap<u32, u64>, drive: char, app
     }
     let mut sel: Vec<bool> = items.iter().map(|i| all || if safe_only { i.risk == Risk::Safe } else { i.risk != Risk::Ask }).collect();
     let sum = |sel: &[bool]| -> u64 { items.iter().zip(sel).filter(|(_, s)| **s).map(|(i, _)| i.bytes).sum() };
-    println!("{}", tf!("\nМожно освободить: {} безопасно, {} всего ({} мест)", "\nYou can free: {} safely, {} in total ({} places)", human(sum(&sel)), human(items.iter().map(|i| i.bytes).sum()), items.len()));
+    println!("{}", tf!("\nМожно освободить: {} безопасно, {} всего ({} мест)", "\nYou can free: {} safely, {} in total ({} places)", "\nVocê pode liberar: {} com segurança, {} no total ({} lugares)", human(sum(&sel)), human(items.iter().map(|i| i.bytes).sum()), items.len()));
     let line = |p: &str| { print!("{p}"); let _ = std::io::stdout().flush(); let mut l = String::new(); let _ = std::io::stdin().read_line(&mut l); l };
     if !apply && !ask { println!("{}", t!("(только просмотр; --apply удалит безопасное, --apply --all всё, --apply --safe только зелёное)", "(preview only; --apply deletes the safe items, --apply --all everything, --apply --safe only the green ones)")); return; }
     if !apply {
@@ -288,16 +288,16 @@ pub fn clean(recs: &HashMap<u32, Rec>, tot: &HashMap<u32, u64>, drive: char, app
             match i.how {
                 How::Wipe => wipe(p),
                 How::Remove => remove(p),
-                How::Quarantine => { seq += 1; if !quarantine(p, stamp, seq) { println!("{}", tf!("не удалось убрать: {}", "could not remove: {}", p.display())); } }
+                How::Quarantine => { seq += 1; if !quarantine(p, stamp, seq) { println!("{}", tf!("не удалось убрать: {}", "could not remove: {}", "não foi possível remover: {}", p.display())); } }
             }
         }
         let left: u64 = i.paths.iter().map(|p| size_of(p)).sum();
         let gone = i.bytes.saturating_sub(left);
         if i.how == How::Quarantine { held += gone } else { freed += gone }
-        if left > 0 && i.how != How::Quarantine { println!("{}", tf!("частично осталось {} (занято программой или нет прав): {}", "partially left {} (in use by a program or no rights): {}", human(left), i.label)); }
+        if left > 0 && i.how != How::Quarantine { println!("{}", tf!("частично осталось {} (занято программой или нет прав): {}", "partially left {} (in use by a program or no rights): {}", "{} parcialmente esquerdo (em uso por um programa ou sem direitos): {}", human(left), i.label)); }
     }
-    println!("{}", tf!("\nОсвобождено: {}. В карантине: {} (место вернётся через {QUAR_DAYS} дней или после rs-du --purge).", "\nFreed: {}. In quarantine: {} (the space returns in {QUAR_DAYS} days or after rs-du --purge).", human(freed), human(held)));
-    println!("{}", tf!("Список: {}", "List: {}", log.join("clean-log.txt").display()));
+    println!("{}", tf!("\nОсвобождено: {}. В карантине: {} (место вернётся через {QUAR_DAYS} дней или после rs-du --purge).", "\nFreed: {}. In quarantine: {} (the space returns in {QUAR_DAYS} days or after rs-du --purge).", "\nLiberado: {}. Em quarentena: {} (o espaço retorna em dias {QUAR_DAYS} ou após rs-du --purge).", human(freed), human(held)));
+    println!("{}", tf!("Список: {}", "List: {}", "Lista: {}", log.join("clean-log.txt").display()));
     if ask { line(t!("Нажмите Enter, чтобы закрыть.", "Press Enter to close.")); }
 }
 

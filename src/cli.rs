@@ -26,11 +26,11 @@ pub(crate) fn cli(args: &[String]) -> i32 {
     let yes = args.iter().any(|a| a == "--yes");
     let words: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--yes").collect();
     let find = |n: &str| PLUGINS.iter().position(|p| p.name == n);
-    let usage = "usage: plugin-launcher list | install <plugin>...|all --yes | update <plugin> | uninstall <plugin> | rollback --yes";
+    let usage = winrust_common::pt!("usage: plugin-launcher list | install <plugin>...|all --yes | update <plugin> | uninstall <plugin> | rollback --yes");
     let result = match words.as_slice() {
         ["list"] => {
             for p in PLUGINS {
-                say(&format!("{:<16}{}", p.name, if p.actions.is_none() { "stub" } else if (p.installed)() { "installed" } else { "not installed" }));
+                say(&format!("{:<16}{}", p.name, if p.actions.is_none() { winrust_common::pt!("stub") } else if (p.installed)() { winrust_common::pt!("installed") } else { winrust_common::pt!("not installed") }));
             }
             return 0;
         }
@@ -42,7 +42,7 @@ pub(crate) fn cli(args: &[String]) -> i32 {
                     "all" => idx.extend(ready().filter(|&i| selected_by_default(PLUGINS[i].name, false))),
                     n => match find(n) {
                         Some(i) => idx.push(i),
-                        None => return { say(&format!("unknown plugin: {n}")); 2 },
+                        None => return { say(&winrust_common::pf!("unknown plugin: {n}", "plugin desconhecido: {n}")); 2 },
                     },
                 }
             }
@@ -52,41 +52,41 @@ pub(crate) fn cli(args: &[String]) -> i32 {
                 for &i in &idx {
                     say(&format!("{}: {}", PLUGINS[i].name, PLUGINS[i].warn.get()));
                 }
-                return { say("Nothing changed. Repeat with --yes to install."); 2 };
+                return { say(winrust_common::pt!("Nothing changed. Repeat with --yes to install.")); 2 };
             }
             // one that fails or is already there does not stop the rest
             let mut failed = false;
             for i in idx {
                 if (PLUGINS[i].installed)() {
-                    say(&format!("{} is already installed", PLUGINS[i].name));
+                    say(&winrust_common::pf!("{} is already installed", "{} já está instalado", PLUGINS[i].name));
                     continue;
                 }
                 match install_plugin(i) {
                     Ok(m) => say(&m),
                     Err(e) => {
                         failed = true;
-                        say(&format!("error: {}: {e}", PLUGINS[i].name));
+                        say(&winrust_common::pf!("error: {}: {e}", "erro: {}: {e}", PLUGINS[i].name));
                     }
                 }
             }
             return if failed { 1 } else { 0 };
         }
         ["update", n] => match find(n) {
-            None => return { say(&format!("unknown plugin: {n}")); 2 },
-            Some(i) if !(PLUGINS[i].installed)() => return { say(&format!("{n} is not installed (use install)")); 2 },
+            None => return { say(&winrust_common::pf!("unknown plugin: {n}", "plugin desconhecido: {n}")); 2 },
+            Some(i) if !(PLUGINS[i].installed)() => return { say(&winrust_common::pf!("{n} is not installed (use install)", "{n} não está instalado (use install)")); 2 },
             Some(i) => install_plugin(i),
         },
         ["uninstall", n] => match find(n) {
-            None => return { say(&format!("unknown plugin: {n}")); 2 },
-            Some(i) if !(PLUGINS[i].installed)() => return { say(&format!("{n} is not installed")); 0 },
+            None => return { say(&winrust_common::pf!("unknown plugin: {n}", "plugin desconhecido: {n}")); 2 },
+            Some(i) if !(PLUGINS[i].installed)() => return { say(&winrust_common::pf!("{n} is not installed", "{n} não está instalado")); 0 },
             Some(i) => uninstall_plugin(i),
         },
         ["rollback"] if yes => rollback(),
-        ["rollback"] => return { say("Removes every installed plugin. Repeat with --yes."); 2 },
+        ["rollback"] => return { say(winrust_common::pt!("Removes every installed plugin. Repeat with --yes.")); 2 },
         _ => return { say(usage); 2 },
     };
     match result {
         Ok(m) => { say(&m); 0 }
-        Err(e) => { say(&format!("error: {e}")); 1 }
+        Err(e) => { say(&winrust_common::pf!("error: {e}", "erro: {e}")); 1 }
     }
 }

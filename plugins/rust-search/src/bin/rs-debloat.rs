@@ -72,55 +72,57 @@ fn services(with_wsearch: bool) -> Vec<(&'static str, &'static str)> {
 }
 
 fn plan(with_wsearch: bool) {
-    println!("Dry run: nothing is changed. Add --apply (admin) to do it, --undo to revert.\n");
+    println!("{}", winrust_common::pf!("Dry run: nothing is changed. Add --apply (admin) to do it, --undo to revert.\n", "Simulação: nada foi alterado. Use --apply como administrador para aplicar ou --undo para reverter.\n"));
     for (svc, why) in services(with_wsearch) {
+        let why = winrust_common::pt!(why);
         match start_mode(svc) {
-            None => println!("  service {svc:<18} not present"),
-            Some("disabled") => println!("  service {svc:<18} already disabled"),
-            Some(m) => println!("  service {svc:<18} {m} -> disabled   ({why})"),
+            None => println!("{}", winrust_common::pf!("  service {svc:<18} not present", "  serviço {svc:<18} não presente")),
+            Some("disabled") => println!("{}", winrust_common::pf!("  service {svc:<18} already disabled", "  serviço {svc:<18} já desabilitado")),
+            Some(m) => println!("{}", winrust_common::pf!("  service {svc:<18} {m} -> disabled   ({why})", "  serviço {svc:<18} {m} -> desabilitado ({why})")),
         }
     }
     for (key, value, data, why) in REGS {
-        let state = if reg_exists(key, value) { "already set, left alone" } else { "will set" };
-        println!("  policy  {value:<32} = {data}  {state}   ({why})");
+        let why = winrust_common::pt!(why);
+        let state = if reg_exists(key, value) { winrust_common::pt!("already set, left alone") } else { winrust_common::pt!("will set") };
+        println!("{}", winrust_common::pf!("  policy  {value:<32} = {data}  {state}   ({why})", "  política {value:<32} = {data} {state} ({why})"));
     }
     if !with_wsearch {
-        println!("\nWindows Search is not included; add --with-wsearch once rs has replaced it for you.");
+        println!("{}", winrust_common::pf!("\nWindows Search is not included; add --with-wsearch once rs has replaced it for you.", "\nA Pesquisa do Windows não está incluída; adicione --with-wsearch assim que rs o substituir para você."));
     }
 }
 
 fn apply(with_wsearch: bool) -> Result<(), String> {
     let path = undo_path();
-    fs::create_dir_all(path.parent().unwrap()).map_err(|e| format!("cannot create {}: {e} (run as admin)", path.parent().unwrap().display()))?;
+    fs::create_dir_all(path.parent().unwrap()).map_err(|e| winrust_common::pf!("cannot create {}: {e} (run as admin)", "não é possível criar {}: {e} (executar como administrador)", path.parent().unwrap().display()))?;
     let mut log = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     for (svc, _) in services(with_wsearch) {
         match start_mode(svc) {
-            None => println!("skip   {svc}: not present"),
-            Some("disabled") => println!("skip   {svc}: already disabled"),
+            None => println!("{}", winrust_common::pf!("skip   {svc}: not present", "pular {svc}: não presente")),
+            Some("disabled") => println!("{}", winrust_common::pf!("skip   {svc}: already disabled", "pular {svc}: já desabilitado")),
             Some(mode) => {
                 writeln!(log, "svc|{svc}|{mode}").map_err(|e| e.to_string())?; // log BEFORE changing
                 let (ok, _) = run("sc.exe", &["config", svc, "start=", "disabled"]);
                 let _ = run("sc.exe", &["stop", svc]);
-                println!("{}  {svc}: {mode} -> disabled", if ok { "done  " } else { "FAILED" });
+                println!("{}", winrust_common::pf!("{}  {svc}: {mode} -> disabled", "{} {svc}: {mode} -> desativado", if ok { winrust_common::pt!("done  ") } else { winrust_common::pt!("FAILED") }));
             }
         }
     }
     for (key, value, data, _) in REGS {
         if reg_exists(key, value) {
-            println!("skip   {value}: already set");
+            println!("{}", winrust_common::pf!("skip   {value}: already set", "pular {value}: já definido"));
             continue;
         }
         writeln!(log, "reg|{key}|{value}").map_err(|e| e.to_string())?;
         let (ok, _) = run("reg.exe", &["add", key, "/v", value, "/t", "REG_DWORD", "/d", &data.to_string(), "/f"]);
-        println!("{}  {value} = {data}", if ok { "done  " } else { "FAILED" });
+        println!("{}  {value} = {data}", if ok { winrust_common::pt!("done  ") } else { winrust_common::pt!("FAILED") });
     }
-    println!("\nUndo information saved to {}. Some changes need a reboot or sign-out.", path.display());
+    println!("{}", winrust_common::pf!("\nUndo information saved to {}. Some changes need a reboot or sign-out.", "\nDesfazer informações salvas em {}. Algumas alterações precisam ser reinicializadas ou desconectadas.", path.display()));
     Ok(())
 }
 
 fn undo() -> Result<(), String> {
     let path = undo_path();
-    let text = fs::read_to_string(&path).map_err(|_| "nothing to undo (no undo file)".to_string())?;
+    let text = fs::read_to_string(&path).map_err(|_| winrust_common::pt!("nothing to undo (no undo file)").to_string())?;
     for line in text.lines() {
         let f: Vec<&str> = line.split('|').collect();
         let ok = match f.as_slice() {
@@ -128,10 +130,10 @@ fn undo() -> Result<(), String> {
             ["reg", key, value] => run("reg.exe", &["delete", key, "/v", value, "/f"]).0,
             _ => continue,
         };
-        println!("{}  {line}", if ok { "restored" } else { "FAILED  " });
+        println!("{}  {line}", if ok { winrust_common::pt!("restored") } else { winrust_common::pt!("FAILED  ") });
     }
     fs::remove_file(&path).map_err(|e| e.to_string())?;
-    println!("\nServices were restored to their old start mode (start them manually or reboot).");
+    println!("{}", winrust_common::pf!("\nServices were restored to their old start mode (start them manually or reboot).", "\nOs serviços foram restaurados ao modo de inicialização antigo (inicie-os manualmente ou reinicie)."));
     Ok(())
 }
 

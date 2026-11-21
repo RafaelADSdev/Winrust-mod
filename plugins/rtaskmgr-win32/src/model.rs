@@ -128,7 +128,7 @@ pub struct Row {
 
 pub fn dec(v: f64, digits: usize) -> String {
     let s = format!("{:.*}", digits, v);
-    if en!() { s } else { s.replace('.', ",") }
+    if lang!() == winrust_common::locale::Language::English { s } else { s.replace('.', ",") }
 }
 
 pub fn fmt_cpu(v: f32) -> String {
@@ -137,12 +137,21 @@ pub fn fmt_cpu(v: f32) -> String {
 
 pub fn fmt_mem_ru(b: u64) -> String {
     let mb = b as f64 / 1_048_576.0;
-    if mb >= 1000.0 { tf!("{} МБ", "{} MB", { let g = group_thousands(mb as u64); if en!() { g } else { g.replace(',', " ") } }) } else if mb >= 100.0 { tf!("{} МБ", "{} MB", dec(mb, 0)) } else { tf!("{} МБ", "{} MB", dec(mb, 1)) }
+    if mb >= 1000.0 {
+        use winrust_common::locale::Language;
+        let grouped = group_thousands(mb as u64);
+        let number = match lang!() {
+            Language::English => grouped,
+            Language::Russian => grouped.replace(',', " "),
+            Language::Portuguese => grouped.replace(',', "."),
+        };
+        tf!("{} МБ", "{} MB", "{} MB", number)
+    } else if mb >= 100.0 { tf!("{} МБ", "{} MB", "{} MB", dec(mb, 0)) } else { tf!("{} МБ", "{} MB", "{} MB", dec(mb, 1)) }
 }
 
 pub fn fmt_disk_ru(bps: f64) -> String {
     let mb = bps / 1_048_576.0;
-    if mb < 0.05 { t!("0 МБ/с", "0 MB/s").into() } else { tf!("{} МБ/с", "{} MB/s", dec(mb, 1)) }
+    if mb < 0.05 { t!("0 МБ/с", "0 MB/s").into() } else { tf!("{} МБ/с", "{} MB/s", "{}MB/s", dec(mb, 1)) }
 }
 
 pub fn fmt_net_ru(bps: f64, known: bool) -> String {
@@ -150,7 +159,7 @@ pub fn fmt_net_ru(bps: f64, known: bool) -> String {
         return "—".into();
     }
     let mbit = bps * 8.0 / 1e6;
-    if mbit < 0.05 { t!("0 Мбит/с", "0 Mbps").into() } else { tf!("{} Мбит/с", "{} Mbps", dec(mbit, 1)) }
+    if mbit < 0.05 { t!("0 Мбит/с", "0 Mbps").into() } else { tf!("{} Мбит/с", "{} Mbps", "{}Mbps", dec(mbit, 1)) }
 }
 
 /// Описание/имя для отображения: описание файла, если известно, иначе имя без «.exe».
@@ -170,7 +179,7 @@ fn svc_display(d: &Data, pid: u32) -> Option<String> {
 fn child_name(d: &Data, p: &Proc) -> String {
     if p.name.eq_ignore_ascii_case("svchost.exe")
         && let Some(s) = svc_display(d, p.pid) {
-            return tf!("Узел службы: {s}", "Service host: {s}");
+            return tf!("Узел службы: {s}", "Service host: {s}", "Host de serviço: {s}");
         }
     if let Some(t) = &p.title {
         return t.clone();
@@ -195,11 +204,11 @@ fn tip_for(procs: &[&Proc], group: bool) -> String {
     let total = by_text.len();
     let mut s = String::from(t!("Почему помечено:", "Why flagged:"));
     for (sev, t, pids) in by_text.into_iter().take(6) {
-        let who = if pids.len() > 1 { tf!(" (процессов: {})", " (processes: {})", pids.len()) } else if group && procs.len() > 1 { format!(" [PID {}]", pids[0]) } else { String::new() };
+        let who = if pids.len() > 1 { tf!(" (процессов: {})", " (processes: {})", " (processos: {})", pids.len()) } else if group && procs.len() > 1 { format!(" [PID {}]", pids[0]) } else { String::new() };
         s += &format!("\n{} — {t}{who}", suspect::sev_word(sev));
     }
     if total > 6 {
-        s += &tf!("\n… и ещё причин: {}", "\n… and {} more reasons", total - 6);
+        s += &tf!("\n… и ещё причин: {}", "\n… and {} more reasons", "\n… e {} mais razões", total - 6);
     }
     s
 }
@@ -341,7 +350,7 @@ pub fn build_rows(d: &Data, c: &BuildCtx) -> Vec<Row> {
                 // без администратора журнал загрузки не читается: «нет данных», а не «не замедляет»
                 let impact = if d.is_admin { crate::startup::boot_impact(s, crate::startup::boot_log()) } else { None };
                 let impact_txt = match impact {
-                    Some(ms) => tf!("+{} с", "+{} s", dec(ms as f64 / 1000.0, 1)),
+                    Some(ms) => tf!("+{} с", "+{} s", "+{}s", dec(ms as f64 / 1000.0, 1)),
                     None if d.is_admin => "—".into(),
                     None => t!("нужен администратор", "administrator needed").into(),
                 };
@@ -351,7 +360,7 @@ pub fn build_rows(d: &Data, c: &BuildCtx) -> Vec<Row> {
                     cells: vec![s.name.clone(), company, (if s.enabled { t!("Включено", "Enabled") } else { t!("Отключено", "Disabled") }).into(), impact_txt, s.command.clone()],
                     sortv: vec![f64::NAN, f64::NAN, f64::NAN, impact.unwrap_or(0) as f64, f64::NAN],
                     heat: vec![None; 5],
-                    tip: tf!("Источник: {}.{}", "Source: {}.{}", s.source_label(), if s.needs_admin() && !d.is_admin { t!(" Для изменения нужны права администратора.", " Administrator rights are needed to change it.") } else { "" }),
+                    tip: tf!("Источник: {}.{}", "Source: {}.{}", "Fonte: {}.{}", s.source_label(), if s.needs_admin() && !d.is_admin { t!(" Для изменения нужны права администратора.", " Administrator rights are needed to change it.") } else { "" }),
                     ..Default::default()
                 }
             })
@@ -366,7 +375,7 @@ pub fn build_rows(d: &Data, c: &BuildCtx) -> Vec<Row> {
                     State::Off => t!("Выключено", "Off").to_string(),
                     State::Busy => t!("Выполняется…", "Running…").to_string(),
                     State::Info(s) => s.clone(),
-                    State::Unavailable(s) => tf!("Недоступно: {s}", "Unavailable: {s}"),
+                    State::Unavailable(s) => tf!("Недоступно: {s}", "Unavailable: {s}", "Indisponível: {s}"),
                 };
                 Row {
                     key: id.key().into(),
@@ -398,7 +407,7 @@ pub fn build_rows(d: &Data, c: &BuildCtx) -> Vec<Row> {
                 key: i.to_string(),
                 cells: vec![
                     if r.proc == "*" { t!("любой", "any").into() } else { r.proc.clone() },
-                    tf!("ЦП > {:.0}% дольше {} с", "CPU > {:.0}% for over {} s", r.cpu, r.secs),
+                    tf!("ЦП > {:.0}% дольше {} с", "CPU > {:.0}% for over {} s", "CPU > {:.0}% para mais de {} s", r.cpu, r.secs),
                     (if r.act == crate::store::RuleAct::Lower { t!("Понизить приоритет", "Lower priority") } else { t!("Уведомить", "Notify") }).into(),
                     r.hits.to_string(),
                 ],

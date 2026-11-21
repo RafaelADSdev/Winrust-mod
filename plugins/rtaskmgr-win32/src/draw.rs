@@ -516,11 +516,11 @@ pub struct PerfItem<'a> {
 }
 
 fn gb(b: u64) -> String {
-    tf!("{} ГБ", "{} GB", dec(b as f64 / 1_073_741_824.0, 1))
+    tf!("{} ГБ", "{} GB", "{} GB", dec(b as f64 / 1_073_741_824.0, 1))
 }
 
 fn mb_cache(b: u64) -> String {
-    if b >= 1 << 20 { tf!("{} МБ", "{} MB", dec(b as f64 / 1_048_576.0, 1)) } else { tf!("{} КБ", "{} KB", b >> 10) }
+    if b >= 1 << 20 { tf!("{} МБ", "{} MB", "{}MB", dec(b as f64 / 1_048_576.0, 1)) } else { tf!("{} КБ", "{} KB", "{} KB", b >> 10) }
 }
 
 /// Название подключения по имени адаптера: «Wi-Fi», «Ethernet», «Bluetooth» …
@@ -548,7 +548,7 @@ pub fn perf_items(d: &Data) -> Vec<PerfItem<'_>> {
     let used = d.sys.used_memory();
     let cpu_brand = d.sys.cpus().first().map_or(String::new(), |c| c.brand().to_string());
     let m = &d.meminfo;
-    let ms = |x: f64| tf!("{} МБ/с", "{} MB/s", dec(x / 1_048_576.0, 1));
+    let ms = |x: f64| tf!("{} МБ/с", "{} MB/s", "{}MB/s", dec(x / 1_048_576.0, 1));
     let gspec = |label: &str, right: &str, q, color, ymax| GraphSpec { label: label.into(), right: right.into(), series: vec![(q, color)], ymax };
     let kinds = perf_kinds(d);
     let mut v = vec![];
@@ -572,7 +572,7 @@ pub fn perf_items(d: &Data) -> Vec<PerfItem<'_>> {
             PerfKind::Cpu => v.push(PerfItem {
                 kind,
                 title: t!("ЦП", "CPU").into(),
-                line1: tf!("{:.0}%  {} ГГц", "{:.0}%  {} GHz", last(&s.cpu), dec(speed as f64, 2)),
+                line1: tf!("{:.0}%  {} ГГц", "{:.0}%  {} GHz", "{:.0}%{} GHz", last(&s.cpu), dec(speed as f64, 2)),
                 line2: String::new(),
                 graphs: vec![gspec(t!("% использования", "% utilization"), "100%", &s.cpu, col(0), 100.0)],
                 layout: GLayout::Single,
@@ -580,7 +580,7 @@ pub fn perf_items(d: &Data) -> Vec<PerfItem<'_>> {
                 device: cpu_brand.clone(),
                 stats: vec![
                     (t!("Использование", "Utilization").into(), format!("{:.0}%", last(&s.cpu))),
-                    (t!("Скорость", "Speed").into(), tf!("{} ГГц", "{} GHz", dec(speed as f64, 2))),
+                    (t!("Скорость", "Speed").into(), tf!("{} ГГц", "{} GHz", "{}GHz", dec(speed as f64, 2))),
                     (t!("Процессы", "Processes").into(), m.processes.to_string()),
                     (t!("Потоки", "Threads").into(), m.threads.to_string()),
                     (t!("Дескрипторы", "Handles").into(), m.handles.to_string()),
@@ -588,7 +588,7 @@ pub fn perf_items(d: &Data) -> Vec<PerfItem<'_>> {
                 ],
                 stat_cols: 2,
                 facts: vec![
-                    (t!("Базовая скорость:", "Base speed:").into(), tf!("{} ГГц", "{} GHz", dec(si.base_mhz as f64 / 1000.0, 2))),
+                    (t!("Базовая скорость:", "Base speed:").into(), tf!("{} ГГц", "{} GHz", "{}GHz", dec(si.base_mhz as f64 / 1000.0, 2))),
                     (t!("Сокетов:", "Sockets:").into(), si.sockets.to_string()),
                     (t!("Ядер:", "Cores:").into(), sysinfo::System::physical_core_count().unwrap_or(0).to_string()),
                     (t!("Логических процессоров:", "Logical processors:").into(), d.sys.cpus().len().to_string()),
@@ -609,10 +609,10 @@ pub fn perf_items(d: &Data) -> Vec<PerfItem<'_>> {
                 let cached = if d.sample.mem_modified + d.sample.mem_standby > 0 { d.sample.mem_modified + d.sample.mem_standby } else { m.cache };
                 let mut facts: Vec<(String, String)> = vec![];
                 if !mh.dimms.is_empty() {
-                    facts.push((t!("Скорость:", "Speed:").into(), tf!("{} МТ/с", "{} MT/s", mh.speed())));
-                    facts.push((t!("Использовано слотов:", "Slots used:").into(), tf!("{} из {}", "{} of {}", mh.dimms.len(), mh.slots.max(mh.dimms.len() as u32))));
+                    facts.push((t!("Скорость:", "Speed:").into(), tf!("{} МТ/с", "{} MT/s", "{} MT/s", mh.speed())));
+                    facts.push((t!("Использовано слотов:", "Slots used:").into(), tf!("{} из {}", "{} of {}", "{} de {}", mh.dimms.len(), mh.slots.max(mh.dimms.len() as u32))));
                     facts.push((t!("Форм-фактор:", "Form factor:").into(), mh.form().into()));
-                    facts.push((t!("Зарезервировано аппаратурой:", "Hardware reserved:").into(), tf!("{} МБ", "{} MB", dec(reserved as f64 / 1_048_576.0, 0))));
+                    facts.push((t!("Зарезервировано аппаратурой:", "Hardware reserved:").into(), tf!("{} МБ", "{} MB", "{}MB", dec(reserved as f64 / 1_048_576.0, 0))));
                     if !kind_txt.is_empty() {
                         facts.push((t!("Тип:", "Type:").into(), kind_txt.into()));
                     }
@@ -623,17 +623,17 @@ pub fn perf_items(d: &Data) -> Vec<PerfItem<'_>> {
                 let t = total.max(1) as f32;
                 let (mut seg, mut parts): (Vec<(f32, Rgb)>, Vec<String>) = (vec![], vec![]);
                 seg.push((used as f32 / t, col(1)));
-                parts.push(tf!("Используется {}", "In use {}", gb(used)));
+                parts.push(tf!("Используется {}", "In use {}", "Em uso {}", gb(used)));
                 if d.sample.mem_modified > 0 {
                     seg.push((d.sample.mem_modified as f32 / t, col(1).lerp(Rgb(255, 255, 255), 0.25)));
-                    parts.push(tf!("Изменено {}", "Modified {}", gb(d.sample.mem_modified)));
+                    parts.push(tf!("Изменено {}", "Modified {}", "{} modificado", gb(d.sample.mem_modified)));
                 }
                 if d.sample.mem_standby > 0 {
                     seg.push(((d.sample.mem_standby.min(avail)) as f32 / t, col(1).lerp(Rgb(128, 128, 128), 0.6)));
-                    parts.push(tf!("В режиме ожидания {}", "Standby {}", gb(d.sample.mem_standby)));
+                    parts.push(tf!("В режиме ожидания {}", "Standby {}", "Espera {}", gb(d.sample.mem_standby)));
                 }
                 if d.sample.mem_free > 0 {
-                    parts.push(tf!("Свободно {}", "Free {}", gb(d.sample.mem_free)));
+                    parts.push(tf!("Свободно {}", "Free {}", "{} grátis", gb(d.sample.mem_free)));
                 }
                 v.push(PerfItem {
                     kind,
@@ -649,12 +649,12 @@ pub fn perf_items(d: &Data) -> Vec<PerfItem<'_>> {
                         (t!("Доступно", "Available").into(), gb(avail)),
                         (t!("Выделено", "Committed").into(), format!("{}/{}", dec(m.commit_total as f64 / 1_073_741_824.0, 1), gb(m.commit_limit))),
                         (t!("Кэшировано", "Cached").into(), gb(cached)),
-                        (t!("Выгружаемый пул", "Paged pool").into(), tf!("{} МБ", "{} MB", dec(m.paged as f64 / 1_048_576.0, 0))),
-                        (t!("Невыгружаемый пул", "Non-paged pool").into(), tf!("{} МБ", "{} MB", dec(m.nonpaged as f64 / 1_048_576.0, 0))),
+                        (t!("Выгружаемый пул", "Paged pool").into(), tf!("{} МБ", "{} MB", "{}MB", dec(m.paged as f64 / 1_048_576.0, 0))),
+                        (t!("Невыгружаемый пул", "Non-paged pool").into(), tf!("{} МБ", "{} MB", "{}MB", dec(m.nonpaged as f64 / 1_048_576.0, 0))),
                     ],
                     stat_cols: 2,
                     facts,
-                    composition: Some((tf!("Состав памяти: {}", "Memory composition: {}", parts.join(" · ")), seg)),
+                    composition: Some((tf!("Состав памяти: {}", "Memory composition: {}", "Composição da memória: {}", parts.join(" · ")), seg)),
                 });
             }
 
@@ -668,7 +668,7 @@ pub fn perf_items(d: &Data) -> Vec<PerfItem<'_>> {
                     ("", b) => b.to_string(),
                     (k, b) => format!("{k} ({b})"),
                 };
-                let title = tf!("Диск {} ({})", "Disk {} ({})", dk.number, dk.letters.trim());
+                let title = tf!("Диск {} ({})", "Disk {} ({})", "Disco {} ({})", dk.number, dk.letters.trim());
                 let xfer_max = dk.s_rd.iter().chain(dk.s_wr.iter()).cloned().fold(1.0f32, f32::max) * 1.15;
                 let system = dk.letters.to_uppercase().contains("C:");
                 v.push(PerfItem {
@@ -678,14 +678,14 @@ pub fn perf_items(d: &Data) -> Vec<PerfItem<'_>> {
                     line2: format!("{:.0}%", dk.active),
                     graphs: vec![
                         gspec(t!("Время активности", "Active time"), "100%", &dk.s_active, col(2), 100.0),
-                        GraphSpec { label: t!("Скорость передачи данных", "Transfer rate").into(), right: tf!("{} МБ/с", "{} MB/s", dec(xfer_max as f64, 0)), series: vec![(&dk.s_rd, col(2)), (&dk.s_wr, col(2).lerp(Rgb(255, 255, 255), 0.45))], ymax: xfer_max },
+                        GraphSpec { label: t!("Скорость передачи данных", "Transfer rate").into(), right: tf!("{} МБ/с", "{} MB/s", "{}MB/s", dec(xfer_max as f64, 0)), series: vec![(&dk.s_rd, col(2)), (&dk.s_wr, col(2).lerp(Rgb(255, 255, 255), 0.45))], ymax: xfer_max },
                     ],
                     layout: GLayout::Stack,
                     big_title: title,
                     device: model,
                     stats: vec![
                         (t!("Время активности", "Active time").into(), format!("{:.0}%", dk.active)),
-                        (t!("Средний отклик", "Average response time").into(), tf!("{} мс", "{} ms", dec(dk.ms as f64, 1))),
+                        (t!("Средний отклик", "Average response time").into(), tf!("{} мс", "{} ms", "{} ms", dec(dk.ms as f64, 1))),
                         (t!("Скорость чтения", "Read speed").into(), ms(dk.rd)),
                         (t!("Скорость записи", "Write speed").into(), ms(dk.wr)),
                     ],
@@ -711,14 +711,14 @@ pub fn perf_items(d: &Data) -> Vec<PerfItem<'_>> {
                     kind,
                     title: title.clone(),
                     line1: conn.into(),
-                    line2: tf!("О: {} П: {} Кбит/с", "S: {} R: {} Kbps", tx as i64, rx as i64),
-                    graphs: vec![GraphSpec { label: t!("Пропускная способность", "Throughput").into(), right: tf!("{} Кбит/с", "{} Kbps", ymax as i64), series: vec![(&n.s_rx, col(3)), (&n.s_tx, col(3).lerp(Rgb(255, 255, 255), 0.4))], ymax }],
+                    line2: tf!("О: {} П: {} Кбит/с", "S: {} R: {} Kbps", "S: {} R: {} Kbps", tx as i64, rx as i64),
+                    graphs: vec![GraphSpec { label: t!("Пропускная способность", "Throughput").into(), right: tf!("{} Кбит/с", "{} Kbps", "{} Kbps", ymax as i64), series: vec![(&n.s_rx, col(3)), (&n.s_tx, col(3).lerp(Rgb(255, 255, 255), 0.4))], ymax }],
                     layout: GLayout::Single,
                     big_title: title,
                     device: n.name.clone(),
-                    stats: vec![(t!("Отправка", "Send").into(), tf!("{} Кбит/с", "{} Kbps", tx as i64)), (t!("Получение", "Receive").into(), tf!("{} Кбит/с", "{} Kbps", rx as i64))],
+                    stats: vec![(t!("Отправка", "Send").into(), tf!("{} Кбит/с", "{} Kbps", "{} Kbps", tx as i64)), (t!("Получение", "Receive").into(), tf!("{} Кбит/с", "{} Kbps", "{} Kbps", rx as i64))],
                     stat_cols: 2,
-                    facts: vec![(t!("Имя адаптера:", "Adapter name:").into(), n.name.clone()), (t!("Тип подключения:", "Connection type:").into(), conn.into()), (t!("Скорость канала:", "Link speed:").into(), tf!("{:.0} Мбит/с", "{:.0} Mbps", n.bw / 1e6))],
+                    facts: vec![(t!("Имя адаптера:", "Adapter name:").into(), n.name.clone()), (t!("Тип подключения:", "Connection type:").into(), conn.into()), (t!("Скорость канала:", "Link speed:").into(), tf!("{:.0} Мбит/с", "{:.0} Mbps", "{:.0}Mbps", n.bw / 1e6))],
                     composition: None,
                 });
             }

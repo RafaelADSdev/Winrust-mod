@@ -125,7 +125,7 @@ pub fn state(id: Id, is_admin: bool) -> State {
     match id {
         Id::Game | Id::Work => on(active_profile() == Some(id)),
         Id::MemNow => match winrust_common::mem::lists() {
-            Some(l) => State::Info(tf!("свободно {}, кэш {}", "free {}, cache {}", crate::ui::fmt_mem(l.free), crate::ui::fmt_mem(l.standby))),
+            Some(l) => State::Info(tf!("свободно {}, кэш {}", "free {}, cache {}", "{} grátis, cache {}", crate::ui::fmt_mem(l.free), crate::ui::fmt_mem(l.standby))),
             None => State::Unavailable(t!("нет права SeProfileSingleProcess", "no SeProfileSingleProcess right").into()),
         },
         Id::MemAuto if !topbar_installed() => State::Unavailable(t!("нужна панель topbar", "needs the topbar").into()),
@@ -156,7 +156,7 @@ pub fn start(id: Id, on: bool, donors: Vec<u32>) -> Result<(), String> {
         let head = id.title();
         DONE.lock().unwrap().push(match r {
             Ok(msg) => format!("{head}: {msg}"),
-            Err(e) => tf!("{head}: ошибка — {e}", "{head}: error - {e}"),
+            Err(e) => tf!("{head}: ошибка — {e}", "{head}: error - {e}", "{head}: erro - {e}"),
         });
     });
     Ok(())
@@ -168,12 +168,12 @@ fn run(id: Id, on: bool, donors: &[u32]) -> Result<String, String> {
         Id::Game | Id::Work => profile_off(donors),
         Id::MemNow => {
             let before = winrust_common::mem::lists();
-            winrust_common::mem::purge_standby().map_err(|st| tf!("NTSTATUS 0x{:08X}", "NTSTATUS 0x{:08X}", st as u32))?;
+            winrust_common::mem::purge_standby().map_err(|st| tf!("NTSTATUS 0x{:08X}", "NTSTATUS 0x{:08X}", "NTSTATUS0x{:08X}", st as u32))?;
             let freed = match (before, winrust_common::mem::lists()) {
                 (Some(a), Some(b)) => b.free.saturating_sub(a.free),
                 _ => 0,
             };
-            Ok(tf!("освобождено {}", "{} freed", crate::ui::fmt_mem(freed)))
+            Ok(tf!("освобождено {}", "{} freed", "{} liberado", crate::ui::fmt_mem(freed)))
         }
         Id::MemAuto => {
             let f = winrust_common::mem::auto_file().ok_or("ProgramData?")?;
@@ -320,7 +320,7 @@ fn profile_on(id: Id, donors: &[u32]) -> Result<String, String> {
     }
     let f = profile_file();
     fs::create_dir_all(f.parent().unwrap()).and_then(|_| fs::write(&f, text)).map_err(|e| e.to_string())?;
-    Ok(tf!("остановлено служб: {stopped}, закрыто процессов: {closed}", "{stopped} services stopped, {closed} processes closed"))
+    Ok(tf!("остановлено служб: {stopped}, закрыто процессов: {closed}", "{stopped} services stopped, {closed} processes closed", "Serviços {stopped} parados, processos {closed} fechados"))
 }
 
 fn profile_off(donors: &[u32]) -> Result<String, String> {
@@ -339,7 +339,7 @@ fn profile_off(donors: &[u32]) -> Result<String, String> {
         }
     }
     fs::remove_file(&f).map_err(|e| e.to_string())?;
-    Ok(tf!("запущено служб: {started}, программ: {launched}", "{started} services and {launched} programs started again"))
+    Ok(tf!("запущено служб: {started}, программ: {launched}", "{started} services and {launched} programs started again", "Serviços {started} e programas {launched} iniciados novamente"))
 }
 
 // ---------- процессы оболочки ----------
@@ -396,11 +396,11 @@ fn shell_set(on: bool) -> Result<String, String> {
             continue;
         };
         if rc != 0 {
-            return Err(tf!("{exe}: ошибка реестра {rc}", "{exe}: registry error {rc}"));
+            return Err(tf!("{exe}: ошибка реестра {rc}", "{exe}: registry error {rc}", "{exe}: erro de registro {rc}"));
         }
         n += 1;
     }
-    Ok(if on { tf!("заблокировано процессов: {n}", "{n} processes blocked") } else { tf!("разблокировано процессов: {n}", "{n} processes unblocked") })
+    Ok(if on { tf!("заблокировано процессов: {n}", "{n} processes blocked", "Processos {n} bloqueados") } else { tf!("разблокировано процессов: {n}", "{n} processes unblocked", "Processos {n} desbloqueados") })
 }
 
 #[cfg(test)]

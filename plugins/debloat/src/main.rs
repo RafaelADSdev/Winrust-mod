@@ -297,7 +297,7 @@ fn parse_vdf_paths(vdf: &str) -> Vec<String> {
 fn defender_exclusions() -> Result<Vec<String>, String> {
     let (ok, out) = ps("$p=Get-MpPreference -ErrorAction Stop; $p.ExclusionPath; $p.ExclusionProcess");
     if !ok {
-        return Err("Microsoft Defender is not active here (another antivirus?): nothing to exclude".into());
+        return Err(winrust_common::pt!("Microsoft Defender is not active here (another antivirus?): nothing to exclude").into());
     }
     Ok(out.lines().map(|l| l.trim().to_lowercase()).filter(|l| !l.is_empty()).collect())
 }
@@ -325,7 +325,7 @@ fn strip_block(text: &str) -> String {
 }
 
 fn plan(g: Group) {
-    println!("Dry run: nothing is changed. Add --apply (admin) to do it, --undo to revert.\n");
+    println!("{}", winrust_common::pf!("Dry run: nothing is changed. Add --apply (admin) to do it, --undo to revert.\n", "Simulação: nada foi alterado. Use --apply como administrador para aplicar ou --undo para reverter.\n"));
     let (svcs, regs): (&[(&str, &str)], &[(&str, &str, u32, &str)]) = match g {
         Group::Base => (SERVICES, REGS),
         Group::Updaters => (UPD_SERVICES, &[]),
@@ -333,37 +333,39 @@ fn plan(g: Group) {
         _ => (&[], &[]),
     };
     for (svc, why) in svcs {
+        let why = winrust_common::pt!(why);
         match start_mode(svc) {
-            None => println!("  service {svc:<18} not present"),
-            Some("disabled") => println!("  service {svc:<18} already disabled"),
-            Some(m) => println!("  service {svc:<18} {m} -> disabled   ({why})"),
+            None => println!("{}", winrust_common::pf!("  service {svc:<18} not present", "  serviço {svc:<18} não presente")),
+            Some("disabled") => println!("{}", winrust_common::pf!("  service {svc:<18} already disabled", "  serviço {svc:<18} já desabilitado")),
+            Some(m) => println!("{}", winrust_common::pf!("  service {svc:<18} {m} -> disabled   ({why})", "  serviço {svc:<18} {m} -> desabilitado ({why})")),
         }
     }
     for (key, value, data, why) in regs {
+        let why = winrust_common::pt!(why);
         let state = match reg_val(key, value) {
-            Val::Dword(d) if d == *data => "already set".to_string(),
+            Val::Dword(d) if d == *data => winrust_common::pt!("already set").to_string(),
             Val::Dword(d) => format!("{d} -> {data}"),
-            Val::Missing => format!("(none) -> {data}"),
-            Val::Other => "not a DWORD, left alone".into(),
+            Val::Missing => winrust_common::pf!("(none) -> {data}", "(nenhum) -> {data}"),
+            Val::Other => winrust_common::pt!("not a DWORD, left alone").into(),
         };
-        println!("  policy  {value:<34} {state}   ({why})");
+        println!("{}", winrust_common::pf!("  policy  {value:<34} {state}   ({why})", "  política {value:<34} {state} ({why})"));
     }
     match g {
         Group::Updaters => {
             for t in updater_tasks() {
-                println!("  task    {t}   -> disabled");
+                println!("{}", winrust_common::pf!("  task    {t}   -> disabled", "  tarefa {t} -> desabilitada"));
             }
-            println!("  task    {WINGET_TASK}   {}", if has_winget() { "weekly winget upgrade --all" } else { "skipped: winget is not installed" });
+            println!("{}", winrust_common::pf!("  task    {WINGET_TASK}   {}", "  tarefa {WINGET_TASK} {}", if has_winget() { winrust_common::pt!("weekly winget upgrade --all") } else { winrust_common::pt!("skipped: winget is not installed") }));
         }
         Group::Defender => {
             for p in defender_paths() {
-                println!("  exclude {p}");
+                println!("{}", winrust_common::pf!("  exclude {p}", "  excluir {p}"));
             }
             for p in DEF_PROCS {
-                println!("  exclude process {p}");
+                println!("{}", winrust_common::pf!("  exclude process {p}", "  excluir processo {p}"));
             }
         }
-        Group::Dns => println!("  hosts   {} ad/tracker domains -> 0.0.0.0", BLOCK.len()),
+        Group::Dns => println!("{}", winrust_common::pf!("  hosts   {} ad/tracker domains -> 0.0.0.0", "  hospeda domínios de anúncio/rastreador {} -> 0.0.0.0", BLOCK.len())),
         _ => {}
     }
 }
@@ -380,14 +382,14 @@ fn apply_services(list: &[(&str, &str)], log: &mut Log) -> Result<u32, String> {
     let mut failed = 0;
     for (svc, _) in list {
         match start_mode(svc) {
-            None => println!("skip   {svc}: not present"),
-            Some("disabled") => println!("skip   {svc}: already disabled"),
+            None => println!("{}", winrust_common::pf!("skip   {svc}: not present", "pular {svc}: não presente")),
+            Some("disabled") => println!("{}", winrust_common::pf!("skip   {svc}: already disabled", "pular {svc}: já desabilitado")),
             Some(mode) => {
                 log.line(&format!("svc|{svc}|{mode}"))?; // log BEFORE changing
                 let ok = run("sc.exe", &["config", svc, "start=", "disabled"]).0;
                 let _ = run("sc.exe", &["stop", svc]);
                 failed += !ok as u32;
-                println!("{}  {svc}: {mode} -> disabled", if ok { "done  " } else { "FAILED" });
+                println!("{}", winrust_common::pf!("{}  {svc}: {mode} -> disabled", "{} {svc}: {mode} -> desativado", if ok { winrust_common::pt!("done  ") } else { winrust_common::pt!("FAILED") }));
             }
         }
     }
@@ -399,11 +401,11 @@ fn apply_regs(list: &[(&str, &str, u32, &str)], log: &mut Log) -> Result<u32, St
     for (key, value, data, _) in list {
         let old = match reg_val(key, value) {
             Val::Dword(d) if d == *data => {
-                println!("skip   {value}: already {data}");
+                println!("{}", winrust_common::pf!("skip   {value}: already {data}", "pular {value}: já {data}"));
                 continue;
             }
             Val::Other => {
-                println!("skip   {value}: not a DWORD, left alone");
+                println!("{}", winrust_common::pf!("skip   {value}: not a DWORD, left alone", "pule {value}: não é um DWORD, deixado sozinho"));
                 continue;
             }
             Val::Dword(d) => d.to_string(),
@@ -412,7 +414,7 @@ fn apply_regs(list: &[(&str, &str, u32, &str)], log: &mut Log) -> Result<u32, St
         log.line(&format!("reg|{key}|{value}|{old}"))?;
         let ok = run("reg.exe", &["add", key, "/v", value, "/t", "REG_DWORD", "/d", &data.to_string(), "/f"]).0;
         failed += !ok as u32;
-        println!("{}  {value} = {data}", if ok { "done  " } else { "FAILED" });
+        println!("{}  {value} = {data}", if ok { winrust_common::pt!("done  ") } else { winrust_common::pt!("FAILED") });
     }
     Ok(failed)
 }
@@ -421,18 +423,18 @@ fn apply_updaters(log: &mut Log) -> Result<u32, String> {
     let mut failed = apply_services(UPD_SERVICES, log)?;
     for t in updater_tasks() {
         if task_enabled(&t) != Some(true) {
-            println!("skip   {t}: already disabled");
+            println!("{}", winrust_common::pf!("skip   {t}: already disabled", "pular {t}: já desabilitado"));
             continue;
         }
         log.line(&format!("task|{t}"))?;
         let ok = run("schtasks.exe", &["/change", "/tn", &t, "/disable"]).0;
         failed += !ok as u32;
-        println!("{}  {t}: disabled", if ok { "done  " } else { "FAILED" });
+        println!("{}", winrust_common::pf!("{}  {t}: disabled", "{} {t}: desabilitado", if ok { winrust_common::pt!("done  ") } else { winrust_common::pt!("FAILED") }));
     }
     if !has_winget() {
-        println!("skip   {WINGET_TASK}: winget is not installed (App Installer from the Store)");
+        println!("{}", winrust_common::pf!("skip   {WINGET_TASK}: winget is not installed (App Installer from the Store)", "pule {WINGET_TASK}: winget não está instalado (App Installer da Loja)"));
     } else if task_enabled(WINGET_TASK).is_some() {
-        println!("skip   {WINGET_TASK}: already there");
+        println!("{}", winrust_common::pf!("skip   {WINGET_TASK}: already there", "pular {WINGET_TASK}: já está lá"));
     } else {
         log.line(&format!("newtask|{WINGET_TASK}"))?;
         // as the signed-in user (winget is a per-user app), elevated so installers do not ask; no window (conhost --headless)
@@ -446,7 +448,7 @@ fn apply_updaters(log: &mut Log) -> Result<u32, String> {
         );
         let ok = ps(&script).0;
         failed += !ok as u32;
-        println!("{}  {WINGET_TASK}: weekly winget upgrade --all (Sunday 12:00, or at the next start)", if ok { "done  " } else { "FAILED" });
+        println!("{}", winrust_common::pf!("{}  {WINGET_TASK}: weekly winget upgrade --all (Sunday 12:00, or at the next start)", "{} {WINGET_TASK}: atualização semanal do winget --all (domingo às 12h ou na próxima partida)", if ok { winrust_common::pt!("done  ") } else { winrust_common::pt!("FAILED") }));
     }
     Ok(failed)
 }
@@ -456,7 +458,7 @@ fn apply_defender(log: &mut Log) -> Result<u32, String> {
     let paths: Vec<String> = defender_paths().into_iter().filter(|p| !have.contains(&p.to_lowercase())).collect();
     let procs: Vec<&str> = DEF_PROCS.iter().copied().filter(|p| !have.contains(&p.to_lowercase())).collect();
     if paths.is_empty() && procs.is_empty() {
-        println!("skip   nothing new to exclude");
+        println!("{}", winrust_common::pf!("skip   nothing new to exclude", "não pule nada de novo para excluir"));
         return Ok(0);
     }
     for p in &paths {
@@ -475,7 +477,7 @@ fn apply_defender(log: &mut Log) -> Result<u32, String> {
     }
     let ok = ps(&cmd).0;
     for p in paths.iter().map(String::as_str).chain(procs.iter().copied()) {
-        println!("{}  exclude {p}", if ok { "done  " } else { "FAILED" });
+        println!("{}", winrust_common::pf!("{}  exclude {p}", "{} exclui {p}", if ok { winrust_common::pt!("done  ") } else { winrust_common::pt!("FAILED") }));
     }
     Ok(!ok as u32)
 }
@@ -484,21 +486,21 @@ fn apply_dns(log: &mut Log) -> Result<u32, String> {
     let path = hosts_path();
     let text = fs::read_to_string(&path).unwrap_or_default();
     if text.contains(HOSTS_BEGIN) {
-        println!("skip   hosts: the block is already there");
+        println!("{}", winrust_common::pf!("skip   hosts: the block is already there", "pular hosts: o bloco já está lá"));
         return Ok(0);
     }
     log.line("hosts|block")?;
     let new = format!("{}\r\n\r\n{}", text.trim_end_matches(['\r', '\n']), hosts_block());
     let ok = fs::write(&path, new.trim_start_matches(['\r', '\n'])).is_ok();
     let _ = run("ipconfig.exe", &["/flushdns"]);
-    println!("{}  hosts: {} domains blocked", if ok { "done  " } else { "FAILED" }, BLOCK.len());
+    println!("{}", winrust_common::pf!("{}  hosts: {} domains blocked", "Hosts {}: domínios {} bloqueados", if ok { winrust_common::pt!("done  ") } else { winrust_common::pt!("FAILED") }, BLOCK.len()));
     Ok(!ok as u32)
 }
 
 fn apply(g: Group) -> Result<(), String> {
     let path = undo_path(g);
     let dir = path.parent().unwrap();
-    fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e} (run as admin)", dir.display()))?;
+    fs::create_dir_all(dir).map_err(|e| winrust_common::pf!("cannot create {}: {e} (run as admin)", "não é possível criar {}: {e} (executar como administrador)", dir.display()))?;
     let f = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut log = Log(f);
     let failed = match g {
@@ -513,14 +515,14 @@ fn apply(g: Group) -> Result<(), String> {
     if fs::metadata(&path).is_ok_and(|m| m.len() == 0) {
         let _ = fs::remove_file(&path);
     }
-    println!("\nUndo information saved to {}. Some changes need a reboot or sign-out.", path.display());
-    if failed > 0 { Err(format!("{failed} change(s) failed (run as administrator)")) } else { Ok(()) }
+    println!("{}", winrust_common::pf!("\nUndo information saved to {}. Some changes need a reboot or sign-out.", "\nDesfazer informações salvas em {}. Algumas alterações precisam ser reinicializadas ou desconectadas.", path.display()));
+    if failed > 0 { Err(winrust_common::pf!("{failed} change(s) failed (run as administrator)", "Falha nas alterações {failed} (executar como administrador)")) } else { Ok(()) }
 }
 
 fn undo(g: Group) -> Result<(), String> {
     let path = undo_path(g);
     let Ok(text) = fs::read_to_string(&path) else {
-        println!("nothing to undo (no undo file)");
+        println!("{}", winrust_common::pf!("nothing to undo (no undo file)", "nada para desfazer (sem arquivo de desfazer)"));
         return Ok(());
     };
     let mut failed = 0;
@@ -544,13 +546,13 @@ fn undo(g: Group) -> Result<(), String> {
             _ => continue,
         };
         failed += !ok as u32;
-        println!("{}  {line}", if ok { "restored" } else { "FAILED  " });
+        println!("{}  {line}", if ok { winrust_common::pt!("restored") } else { winrust_common::pt!("FAILED  ") });
     }
     if failed > 0 {
-        return Err(format!("{failed} item(s) not restored; the undo file is kept at {}", path.display()));
+        return Err(winrust_common::pf!("{failed} item(s) not restored; the undo file is kept at {}", "Itens {failed} não restaurados; o arquivo de desfazer é mantido em {}", path.display()));
     }
     fs::remove_file(&path).map_err(|e| e.to_string())?;
-    println!("\nRestored (services start again after a reboot or by hand).");
+    println!("{}", winrust_common::pf!("\nRestored (services start again after a reboot or by hand).", "\nRestaurado (os serviços são reiniciados após uma reinicialização ou manualmente)."));
     Ok(())
 }
 
@@ -561,7 +563,7 @@ fn main() {
         Some(g) => match Group::parse(g) {
             Some(g) => g,
             None => {
-                eprintln!("unknown group '{g}' (updaters, defender, ntfs, dns)");
+                eprintln!("{}", winrust_common::pf!("unknown group '{g}' (updaters, defender, ntfs, dns)", "grupo desconhecido '{g}' (atualizadores, defensor, NTFS, DNS)"));
                 std::process::exit(2);
             }
         },

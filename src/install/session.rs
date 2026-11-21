@@ -26,13 +26,13 @@ pub(crate) fn parse(out: &str) -> Result<(String, String), String> {
     let mut l = out.lines().map(str::trim).filter(|l| !l.is_empty());
     match (l.next(), l.next()) {
         (Some(a), Some(b)) if i18n::reg::valid_sid(a) && i18n::reg::valid_sid(b) => Ok((a.into(), b.into())),
-        _ => Err(tf!("не удалось определить пользователя сеанса: {}", "could not determine the signed-in user: {}", out.trim())),
+        _ => Err(tf!("не удалось определить пользователя сеанса: {}", "could not determine the signed-in user: {}", "não foi possível determinar o usuário conectado: {}", out.trim())),
     }
 }
 
 fn detect() -> Result<Session, String> {
     let (sid, token) = parse(&out("powershell", &["-NoProfile", "-NonInteractive", "-Command", FIND]).map_err(|e| {
-        tf!("не удалось определить пользователя сеанса (нет запущенного explorer.exe, topbar или rust-explorer): {e}", "could not determine the signed-in user (no running explorer.exe, topbar or rust-explorer): {e}")
+        tf!("не удалось определить пользователя сеанса (нет запущенного explorer.exe, topbar или rust-explorer): {e}", "could not determine the signed-in user (no running explorer.exe, topbar or rust-explorer): {e}", "não foi possível determinar o usuário conectado (sem execução de explorer.exe, barra superior ou explorador de ferrugem): {e}")
     })?)?;
     if matches!(sid.as_str(), "S-1-5-18" | "S-1-5-19" | "S-1-5-20") {
         return Err(t!("оболочка сеанса запущена не от обычного пользователя (SYSTEM или служба)", "the session shell does not run as a normal user (SYSTEM or a service)").into());

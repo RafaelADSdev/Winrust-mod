@@ -59,7 +59,7 @@ pub fn run(on: bool) -> i32 {
     let cur = get_hz();
     if cur != 60 {
         if !hz_file().exists() { let _ = fs::write(hz_file(), cur.to_string()); } // remember for 'off'
-        if !set_hz(60) { eprintln!("60 Hz not supported on this display"); }
+        if !set_hz(60) { eprintln!("{}", winrust_common::pf!("60 Hz not supported on this display", "60 Hz não suportado neste monitor")); }
     }
     let mut kill = Command::new("taskkill");
     kill.arg("/F");
@@ -68,9 +68,9 @@ pub fn run(on: bool) -> i32 {
 
     let g = match existing.or_else(|| guid_in(&powercfg(&["/duplicatescheme", SAVER]))) {
         Some(g) => g,
-        None => { eprintln!("could not create power scheme"); return 1; }
+        None => { eprintln!("{}", winrust_common::pf!("could not create power scheme", "não foi possível criar esquema de energia")); return 1; }
     };
-    powercfg(&["/changename", &g, NAME, "Max battery life"]);
+    powercfg(&["/changename", &g, NAME, winrust_common::pt!("Max battery life")]);
     // DC = on battery: CPU 40%, no turbo, passive cooling, screen off 1 min, sleep 10 min, brightness 20%
     for (sub, set, v) in [
         ("SUB_PROCESSOR", "PROCTHROTTLEMAX", "40"), ("SUB_PROCESSOR", "PERFBOOSTMODE", "0"), ("SUB_PROCESSOR", "SYSCOOLPOL", "0"),

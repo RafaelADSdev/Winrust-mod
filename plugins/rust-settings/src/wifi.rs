@@ -247,7 +247,7 @@ pub fn reason_text(code: u32) -> String {
             return s;
         }
     }
-    tf!("код {}", "code {}", code)
+    tf!("код {}", "code {}", "código {}", code)
 }
 
 fn xml_escape(s: &str) -> String {
@@ -282,7 +282,7 @@ pub fn add_and_connect(ssid: &str, raw: &[u8], sec: Sec, key: &str, hidden: bool
     let rc = unsafe { WlanSetProfile(c.0, &guid, 0, xml.as_ptr(), null(), 1, null(), &mut reason) };
     xml.iter_mut().for_each(|w| *w = 0); // the password is in there: not left in freed memory
     if rc != 0 {
-        return Err(if rc == ERROR_ACCESS_DENIED { t!("Windows запретила сохранять сети (политика)", "Windows refused to save networks (policy)").into() } else { tf!("Профиль не принят: {}", "Profile rejected: {}", reason_text(reason)) });
+        return Err(if rc == ERROR_ACCESS_DENIED { t!("Windows запретила сохранять сети (политика)", "Windows refused to save networks (policy)").into() } else { tf!("Профиль не принят: {}", "Profile rejected: {}", "Perfil rejeitado: {}", reason_text(reason)) });
     }
     if !connect(ssid, &guid) {
         forget(ssid);
@@ -327,14 +327,14 @@ pub fn add_eap_and_connect(ssid: &str, raw: &[u8], auth: &str, user: &str, pass:
     let mut reason = 0u32;
     let rc = unsafe { WlanSetProfile(c.0, &guid, 0, xml.as_ptr(), null(), 1, null(), &mut reason) };
     if rc != 0 {
-        return Err(if rc == ERROR_ACCESS_DENIED { t!("Windows запретила сохранять сети (политика)", "Windows refused to save networks (policy)").into() } else { tf!("Профиль не принят: {}", "Profile rejected: {}", reason_text(reason)) });
+        return Err(if rc == ERROR_ACCESS_DENIED { t!("Windows запретила сохранять сети (политика)", "Windows refused to save networks (policy)").into() } else { tf!("Профиль не принят: {}", "Profile rejected: {}", "Perfil rejeitado: {}", reason_text(reason)) });
     }
     let mut creds = wide(&eap_user_xml(user, pass));
     let rc = unsafe { WlanSetProfileEapXmlUserData(c.0, &guid, wide(ssid).as_ptr(), 0, creds.as_ptr(), null()) };
     creds.fill(0); // the password is in there: not left in freed memory
     if rc != 0 {
         forget(ssid);
-        return Err(tf!("Не удалось сохранить учётные данные: {}", "Could not save the credentials: {}", reason_text(rc)));
+        return Err(tf!("Не удалось сохранить учётные данные: {}", "Could not save the credentials: {}", "Não foi possível salvar as credenciais: {}", reason_text(rc)));
     }
     if !connect(ssid, &guid) {
         forget(ssid);

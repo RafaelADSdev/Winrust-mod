@@ -75,14 +75,14 @@ pub fn assess(f: &Facts) -> Vec<Reason> {
         let e = exe.to_lowercase().replace('/', "\\");
         let in_windows = e.starts_with(&f.windir.to_lowercase());
         if SYSTEM_NAMES.contains(&name.as_str()) && !in_windows {
-            add(3, tf!("Имя совпадает с системным процессом «{}», но файл лежит не в папке Windows: {}", "The name matches the system process '{}' but the file is not in the Windows folder: {}", f.name, short(exe)));
+            add(3, tf!("Имя совпадает с системным процессом «{}», но файл лежит не в папке Windows: {}", "The name matches the system process '{}' but the file is not in the Windows folder: {}", "O nome corresponde ao processo do sistema '{}', mas o arquivo não está na pasta do Windows: {}", f.name, short(exe)));
         }
         if !f.exists {
             add(3, t!("Файла процесса нет на диске — его удалили после запуска (так ведёт себя вредоносный код, а иногда и установщики)", "The process file is gone from disk - it was deleted after launch (malware does this, and sometimes installers)").into());
         }
         let risky = RISKY_DIRS.iter().find(|(d, _)| e.contains(d));
         if let Some((_, what)) = risky {
-            add(2, tf!("Запущен из {what}: {} — постоянные программы обычно стоят в Program Files или AppData\\Local\\Programs", "Started from {what}: {} - permanent programs usually live in Program Files or AppData\\Local\\Programs", short(exe)));
+            add(2, tf!("Запущен из {what}: {} — постоянные программы обычно стоят в Program Files или AppData\\Local\\Programs", "Started from {what}: {} - permanent programs usually live in Program Files or AppData\\Local\\Programs", "Iniciado em {what}: {} - programas permanentes geralmente residem em Arquivos de Programas ou AppData\\Local\\Programas", short(exe)));
         }
         if !in_windows {
             match f.sig {
@@ -94,8 +94,8 @@ pub fn assess(f: &Facts) -> Vec<Reason> {
         }
     }
     match (name.as_str(), parent.as_deref()) {
-        ("svchost.exe", Some(p)) if p != "services.exe" => add(3, tf!("svchost.exe запущен не службой services.exe, а процессом «{}»", "svchost.exe was started not by services.exe but by the process '{}'", f.parent.unwrap_or(""))),
-        ("lsass.exe", Some(p)) if p != "wininit.exe" => add(3, tf!("lsass.exe запущен не wininit.exe, а процессом «{}»", "lsass.exe was started not by wininit.exe but by the process '{}'", f.parent.unwrap_or(""))),
+        ("svchost.exe", Some(p)) if p != "services.exe" => add(3, tf!("svchost.exe запущен не службой services.exe, а процессом «{}»", "svchost.exe was started not by services.exe but by the process '{}'", "svchost.exe foi iniciado não por services.exe, mas pelo processo '{}'", f.parent.unwrap_or(""))),
+        ("lsass.exe", Some(p)) if p != "wininit.exe" => add(3, tf!("lsass.exe запущен не wininit.exe, а процессом «{}»", "lsass.exe was started not by wininit.exe but by the process '{}'", "lsass.exe foi iniciado não por wininit.exe, mas pelo processo '{}'", f.parent.unwrap_or(""))),
         _ => {}
     }
     out.sort_by_key(|r| std::cmp::Reverse(r.sev));

@@ -52,10 +52,10 @@ fn main() {
         let j = |v: &[(String, u64)]| v.iter().map(|(p, s)| format!("{{\"path\":\"{}\",\"bytes\":{s}}}", p.replace('\\', "\\\\").replace('"', "\\\""))).collect::<Vec<_>>().join(",");
         println!("{{\"drive\":\"{drive}\",\"folders\":[{}],\"files\":[{}]}}", j(&d), j(&f));
     } else {
-        println!("{drive}: {} records, {} total ({}), {:.2}s", recs.len(), human(tot.get(&ROOT).copied().unwrap_or(0)), if logical { "logical" } else { "on disk" }, t.elapsed().as_secs_f32());
-        println!("\nFolders (depth <= {depth}):");
+        println!("{}", winrust_common::pf!("{drive}: {} records, {} total ({}), {:.2}s", "{drive}: registros {}, total {} ({}), {:.2}s", recs.len(), human(tot.get(&ROOT).copied().unwrap_or(0)), if logical { winrust_common::pt!("logical") } else { winrust_common::pt!("on disk") }, t.elapsed().as_secs_f32()));
+        println!("{}", winrust_common::pf!("\nFolders (depth <= {depth}):", "\nPastas (profundidade <= {depth}):"));
         for (p, s) in &d { println!("{:>10}  {p}", human(*s)); }
-        println!("\nFiles:");
+        println!("{}", winrust_common::pf!("\nFiles:", "\nArquivos:"));
         for (p, s) in &f { println!("{:>10}  {p}", human(*s)); }
     }
 }

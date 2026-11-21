@@ -93,7 +93,7 @@ fn parse(out: &str) -> Vec<Item> {
 fn found() -> Result<Vec<Item>, String> {
     let (ok, out) = ps(r#"Get-AppxPackage -AllUsers | ForEach-Object { "appx|$($_.PackageFullName)|$($_.Name)|$($_.NonRemovable)" }; Get-AppxProvisionedPackage -Online | ForEach-Object { "prov|$($_.PackageName)|$($_.DisplayName)" }"#);
     if !ok && out.trim().is_empty() {
-        return Err("cannot list apps (run as administrator)".into());
+        return Err(winrust_common::pt!("cannot list apps (run as administrator)").into());
     }
     Ok(parse(&out))
 }
@@ -115,37 +115,37 @@ fn edge_setup() -> Option<PathBuf> {
 }
 
 fn plan(od: bool, edge: bool) {
-    println!("Dry run: nothing is removed. --apply REMOVES it FOR GOOD (no undo).\n");
+    println!("{}", winrust_common::pf!("Dry run: nothing is removed. --apply REMOVES it FOR GOOD (no undo).\n", "Simulação: nada foi removido. --apply exclui os itens permanentemente, sem opção de desfazer.\n"));
     match found() {
         Ok(items) => {
             for i in &items {
                 match i {
-                    Item::Appx { name, .. } => println!("  app (installed)    {name}"),
-                    Item::Prov { name, .. } => println!("  app (provisioned)  {name}"),
+                    Item::Appx { name, .. } => println!("{}", winrust_common::pf!("  app (installed)    {name}", "  aplicativo (instalado) {name}")),
+                    Item::Prov { name, .. } => println!("{}", winrust_common::pf!("  app (provisioned)  {name}", "  aplicativo (provisionado) {name}")),
                 }
             }
-            println!("  {} app entries found", items.len());
+            println!("{}", winrust_common::pf!("  {} app entries found", "  Entradas do aplicativo {} encontradas", items.len()));
         }
         Err(e) => println!("  {e}"),
     }
     for t in TASKS.iter().filter(|t| task_exists(t)) {
-        println!("  task               {t}");
+        println!("{}", winrust_common::pf!("  task               {t}", "  tarefa {t}"));
     }
     if od {
-        println!("  OneDrive           {}", onedrive_setup().map_or("not present".into(), |p| p.display().to_string()));
+        println!("{}", winrust_common::pf!("  OneDrive           {}", "  OneDrive {}", onedrive_setup().map_or(winrust_common::pt!("not present").into(), |p| p.display().to_string())));
     }
     if edge {
-        println!("  Edge               {}", edge_setup().map_or("not present".into(), |p| p.display().to_string()));
+        println!("  Edge               {}", edge_setup().map_or(winrust_common::pt!("not present").into(), |p| p.display().to_string()));
     }
 }
 
 fn apply(od: bool, edge: bool) -> Result<(), String> {
     let dir = PathBuf::from(env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into())).join("winrust-purge");
-    fs::create_dir_all(&dir).map_err(|e| format!("{}: {e} (run as admin)", dir.display()))?;
+    fs::create_dir_all(&dir).map_err(|e| winrust_common::pf!("{}: {e} (run as admin)", "{}: {e} (executar como administrador)", dir.display()))?;
     let mut log = fs::OpenOptions::new().create(true).append(true).open(dir.join("removed.txt")).map_err(|e| e.to_string())?;
     let mut failed = 0;
     let mut did = |what: String, ok: bool| {
-        println!("{}  {what}", if ok { "removed" } else { "FAILED " });
+        println!("{}  {what}", if ok { winrust_common::pt!("removed") } else { winrust_common::pt!("FAILED ") });
         if ok {
             let _ = writeln!(log, "{what}");
         } else {
@@ -154,18 +154,18 @@ fn apply(od: bool, edge: bool) -> Result<(), String> {
     };
     for i in found()? {
         match i {
-            Item::Appx { full, name } => did(format!("app {name}"), ps(&format!("Remove-AppxPackage -Package '{full}' -AllUsers -ErrorAction Stop")).0),
-            Item::Prov { pkg, name } => did(format!("provisioned {name}"), ps(&format!("Remove-AppxProvisionedPackage -Online -PackageName '{pkg}' -ErrorAction Stop")).0),
+            Item::Appx { full, name } => did(winrust_common::pf!("app {name}", "aplicativo {name}"), ps(&format!("Remove-AppxPackage -Package '{full}' -AllUsers -ErrorAction Stop")).0),
+            Item::Prov { pkg, name } => did(winrust_common::pf!("provisioned {name}", "{name} provisionado"), ps(&format!("Remove-AppxProvisionedPackage -Online -PackageName '{pkg}' -ErrorAction Stop")).0),
         }
     }
     for t in TASKS.iter().filter(|t| task_exists(t)) {
-        did(format!("task {t}"), run("schtasks.exe", &["/Delete", "/TN", t, "/F"]).0);
+        did(winrust_common::pf!("task {t}", "tarefa {t}"), run("schtasks.exe", &["/Delete", "/TN", t, "/F"]).0);
     }
     if od {
         let _ = run("taskkill", &["/f", "/im", "OneDrive.exe"]);
         match onedrive_setup() {
             Some(p) => did("OneDrive".into(), run(&p.display().to_string(), &["/uninstall"]).0),
-            None => println!("skip     OneDrive: not present"),
+            None => println!("{}", winrust_common::pf!("skip     OneDrive: not present", "pular OneDrive: não presente")),
         }
     }
     if edge {
@@ -173,13 +173,13 @@ fn apply(od: bool, edge: bool) -> Result<(), String> {
             // Windows only lets Edge go outside the EU when this value exists
             Some(p) => {
                 let _ = run("reg", &["add", r"HKLM\SOFTWARE\Microsoft\EdgeUpdateDev", "/v", "AllowUninstall", "/t", "REG_SZ", "/d", "", "/f"]);
-                did("Edge (best effort, Windows may refuse)".into(), run(&p.display().to_string(), &["--uninstall", "--system-level", "--verbose-logging", "--force-uninstall"]).0)
+                did(winrust_common::pt!("Edge (best effort, Windows may refuse)").into(), run(&p.display().to_string(), &["--uninstall", "--system-level", "--verbose-logging", "--force-uninstall"]).0)
             }
-            None => println!("skip     Edge: not present"),
+            None => println!("{}", winrust_common::pf!("skip     Edge: not present", "ignorado  Edge: não encontrado")),
         }
     }
-    println!("\nThis cannot be undone. A log of what was removed: {}", dir.join("removed.txt").display());
-    if failed > 0 { Err(format!("{failed} item(s) failed (run as administrator)")) } else { Ok(()) }
+    println!("{}", winrust_common::pf!("\nThis cannot be undone. A log of what was removed: {}", "\nIsto não pode ser desfeito. Um registro do que foi removido: {}", dir.join("removed.txt").display()));
+    if failed > 0 { Err(winrust_common::pf!("{failed} item(s) failed (run as administrator)", "Os itens {failed} falharam (executar como administrador)")) } else { Ok(()) }
 }
 
 fn main() {
@@ -187,14 +187,14 @@ fn main() {
     let has = |f: &str| a.iter().any(|x| x == f);
     let r = if has("--ask") {
         plan(has("--onedrive"), has("--edge"));
-        print!("
-This REMOVES the apps above FOR GOOD, there is no undo. Type YES to continue: ");
+        print!("{}", winrust_common::pf!("
+This REMOVES the apps above FOR GOOD, there is no undo. Type YES to continue: ", "\nOs aplicativos acima serão excluídos permanentemente. Esta ação é irreversível. Digite YES para continuar: "));
         let _ = std::io::stdout().flush();
         let mut line = String::new();
         let _ = std::io::stdin().read_line(&mut line);
-        let r = if line.trim() == "YES" { apply(has("--onedrive"), has("--edge")) } else { println!("Nothing removed."); Ok(()) };
-        println!("
-Press Enter to close.");
+        let r = if line.trim() == "YES" { apply(has("--onedrive"), has("--edge")) } else { println!("{}", winrust_common::pf!("Nothing removed.", "Nada removido.")); Ok(()) };
+        println!("{}", winrust_common::pf!("
+Press Enter to close.", "\nPressione Enter para fechar."));
         let _ = std::io::stdin().read_line(&mut line);
         r
     } else if has("--apply") {

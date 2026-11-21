@@ -75,11 +75,11 @@ pub fn check(done: impl FnOnce() + Send + 'static) {
     start(t!("Поиск обновлений…", "Checking for updates…"), done, || match session().and_then(|s| search(&s)) {
         Ok(c) => {
             let t = titles(&c);
-            let note = if t.is_empty() { t!("Обновлений нет: установлены все", "You're up to date").into() } else { tf!("Найдено обновлений: {}", "Updates found: {}", t.len()) };
+            let note = if t.is_empty() { t!("Обновлений нет: установлены все", "You're up to date").into() } else { tf!("Найдено обновлений: {}", "Updates found: {}", "Atualizações encontradas: {}", t.len()) };
             with(|s| s.found = Some(t));
             note
         }
-        Err(e) => tf!("Не удалось проверить: {}", "Could not check: {}", err_text(&e)),
+        Err(e) => tf!("Не удалось проверить: {}", "Could not check: {}", "Não foi possível verificar: {}", err_text(&e)),
     });
 }
 
@@ -113,7 +113,7 @@ pub fn install(done: impl FnOnce() + Send + 'static) {
                 with(|s| s.found = Some(vec![]));
                 m
             }
-            Err(e) => tf!("Не удалось установить: {}", "Could not install: {}", err_text(&e)),
+            Err(e) => tf!("Не удалось установить: {}", "Could not install: {}", "Não foi possível instalar: {}", err_text(&e)),
         }
     });
 }
