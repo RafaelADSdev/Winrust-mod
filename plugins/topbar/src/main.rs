@@ -2014,19 +2014,24 @@ unsafe fn app_icon(dc: HDC, icon: HICON, cx: i32, cy: i32, size: i32) {
 }
 
 unsafe fn start_mark(dc: HDC, cx: i32, cy: i32, hot: f32, pressed: f32) {
-    if style() == Style::Modern {
-        let s = sc(14);
-        let rect = RECT { left: cx - s, top: cy - s, right: cx + s, bottom: cy + s };
-        fill(dc, rect, mix(pal().accent, pal().text, 0.15 * hot), sc(10));
-        text(dc, "\u{E700}", rect, on_accent(), DT_CENTER);
-        return;
-    }
+    let current = style();
+    let modern = current == Style::Modern;
+    let ink = if modern {
+        if current.light() { rgb(16, 106, 178) } else { rgb(93, 176, 249) }
+    } else {
+        pal().accent
+    };
     let tile = ((sc(8) as f32) * (1.0 + 0.12 * hot) * (1.0 - 0.2 * pressed)) as i32;
     let gap = sc(1).max(1);
-    let colors = [mix(pal().accent, pal().text, 0.35), mix(pal().accent, pal().text, 0.15), mix(pal().accent, pal().text, 0.15), pal().accent];
+    let colors = [mix(ink, pal().text, 0.35), mix(ink, pal().text, 0.15), mix(ink, pal().text, 0.15), ink];
     for ((dx, dy), color) in [(-1, -1), (0, -1), (-1, 0), (0, 0)].into_iter().zip(colors) {
         let (x, y) = (cx + if dx < 0 { -tile - gap } else { gap }, cy + if dy < 0 { -tile - gap } else { gap });
-        fill(dc, RECT { left: x, top: y, right: x + tile, bottom: y + tile }, color, sc(3));
+        let dot = modern && dx == 0 && dy == 0;
+        let inset = if dot { sc(1).max(1) } else { 0 };
+        let size = tile - 2 * inset;
+        if size > 0 {
+            fill(dc, RECT { left: x + inset, top: y + inset, right: x + inset + size, bottom: y + inset + size }, color, if dot { size } else { sc(3) });
+        }
     }
 }
 
