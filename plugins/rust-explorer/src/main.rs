@@ -13,8 +13,8 @@
 // upgrade: each of those one at a time; then register as the folder-open handler.
 // rust-explorer --desktop  - the desktop for rs-shell: borderless bottom-most color-keyed window with the Desktop folders
 //   (user + public) as big icons over the wallpaper it paints itself (without explorer nothing else does): reads the BMP
-//   that rs-shell converts into %LOCALAPPDATA%\rs-shell\wallpaper.bmp, "fill" style, scaled once at start.
-//   shortcuts: wallpaper is loaded once (changing it needs a restart), icon labels are always white, no background menu /
+//   that rs-shell converts into %LOCALAPPDATA%\rs-shell\wallpaper.bmp, "fill" style on each monitor.
+//   shortcuts: changing the wallpaper file needs a restart, icon labels are always white, no background menu /
 //   drag-to-position / auto-arrange, items from the public desktop can't be renamed.
 #![windows_subsystem = "windows"]
 use std::{cell::RefCell, env, fs, os::windows::fs::MetadataExt, path::{Path, PathBuf}, ptr, sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed}};
@@ -619,27 +619,84 @@ fn search_focus() {
 
 /// Wallpaper for the desktop window.
 mod wall {
+    use super::WALL;
+    use std::ptr;
     use windows_sys::Win32::{Graphics::Gdi::*, UI::WindowsAndMessaging::{IMAGE_BITMAP, LR_LOADFROMFILE, LoadImageW}};
+    use windows_sys::Win32::Foundation::{LPARAM, RECT};
 
-    /// The BMP scaled ("fill": cropped to the screen's aspect) to cw x ch. 0 = no wallpaper file.
-    pub fn load(cw: i32, ch: i32) -> isize {
+    struct MonitorPaint {
+        src: HDC,
+        dst: HDC,
+        source_width: i32,
+        source_height: i32,
+        desktop: RECT,
+    }
+
+    unsafe extern "system" fn paint_monitor(_: HMONITOR, _: HDC, rect: *mut RECT, data: LPARAM) -> i32 {
+        unsafe {
+            let paint = &*(data as *const MonitorPaint);
+            let r = *rect;
+            let (width, height) = (r.right - r.left, r.bottom - r.top);
+            let (sw, sh) = (i64::from(paint.source_width), i64::from(paint.source_height));
+            let (w, h) = (i64::from(width), i64::from(height));
+            if w > 0 && h > 0 {
+                let (crop_w, crop_h) = if sw * h > sh * w {
+                    ((sh * w / h).max(1) as i32, paint.source_height)
+                } else {
+                    (paint.source_width, (sw * h / w).max(1) as i32)
+                };
+                StretchBlt(
+                    paint.dst, r.left - paint.desktop.left, r.top - paint.desktop.top, width, height,
+                    paint.src, (paint.source_width - crop_w) / 2, (paint.source_height - crop_h) / 2,
+                    crop_w, crop_h, SRCCOPY,
+                );
+            }
+            1
+        }
+    }
+
+    pub fn refresh(desktop: RECT) {
+        let (width, height) = (desktop.right - desktop.left, desktop.bottom - desktop.top);
+        let old = WALL.replace((load(desktop, width, height), width, height)).0;
+        if old != 0 { unsafe { DeleteObject(old as _); } }
+    }
+
+    /// Cache one fill crop per monitor in a bitmap covering the virtual desktop.
+    fn load(desktop: RECT, width: i32, height: i32) -> isize {
+        if width <= 0 || height <= 0 { return 0; }
         let Ok(base) = std::env::var("LOCALAPPDATA") else { return 0 };
         let path: Vec<u16> = format!(r"{base}\rs-shell\wallpaper.bmp").encode_utf16().chain([0]).collect();
         unsafe {
-            let src = LoadImageW(std::ptr::null_mut(), path.as_ptr(), IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+            let src = LoadImageW(ptr::null_mut(), path.as_ptr(), IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
             if src.is_null() { return 0; }
             let mut bm: BITMAP = std::mem::zeroed();
-            GetObjectW(src, size_of::<BITMAP>() as i32, &mut bm as *mut _ as _);
-            let screen = GetDC(std::ptr::null_mut());
-            let dst = CreateCompatibleBitmap(screen, cw, ch);
+            if GetObjectW(src, size_of::<BITMAP>() as i32, &mut bm as *mut _ as _) == 0
+                || bm.bmWidth <= 0 || bm.bmHeight <= 0
+            {
+                DeleteObject(src);
+                return 0;
+            }
+            let screen = GetDC(ptr::null_mut());
+            let dst = CreateCompatibleBitmap(screen, width, height);
             let (sdc, ddc) = (CreateCompatibleDC(screen), CreateCompatibleDC(screen));
-            let (o1, o2) = (SelectObject(sdc, src), SelectObject(ddc, dst));
-            SetStretchBltMode(ddc, HALFTONE);
-            let (sw, sh) = if bm.bmWidth * ch > bm.bmHeight * cw { (bm.bmHeight * cw / ch, bm.bmHeight) } else { (bm.bmWidth, bm.bmWidth * ch / cw) };
-            StretchBlt(ddc, 0, 0, cw, ch, sdc, (bm.bmWidth - sw) / 2, (bm.bmHeight - sh) / 2, sw, sh, SRCCOPY);
-            SelectObject(sdc, o1); SelectObject(ddc, o2);
-            DeleteDC(sdc); DeleteDC(ddc); ReleaseDC(std::ptr::null_mut(), screen); DeleteObject(src);
-            dst as isize
+            let allocated = !dst.is_null() && !sdc.is_null() && !ddc.is_null();
+            if allocated {
+                let (o1, o2) = (SelectObject(sdc, src), SelectObject(ddc, dst));
+                PatBlt(ddc, 0, 0, width, height, BLACKNESS);
+                SetStretchBltMode(ddc, HALFTONE);
+                SetBrushOrgEx(ddc, 0, 0, ptr::null_mut());
+                let monitor = MonitorPaint {
+                    src: sdc, dst: ddc, source_width: bm.bmWidth, source_height: bm.bmHeight, desktop,
+                };
+                EnumDisplayMonitors(ptr::null_mut(), ptr::null(), Some(paint_monitor), &monitor as *const _ as LPARAM);
+                SelectObject(sdc, o1);
+                SelectObject(ddc, o2);
+            }
+            DeleteDC(sdc);
+            DeleteDC(ddc);
+            ReleaseDC(ptr::null_mut(), screen);
+            DeleteObject(src);
+            if allocated { dst as isize } else { DeleteObject(dst); 0 }
         }
     }
 
@@ -1142,6 +1199,29 @@ mod desk {
     // "WorkerW" that appears: Windows 11 24H2 has it as a child of Progman, under the icons. Ours is the same, and while it
     // holds a wallpaper the icon list turns see-through (colour key) so the wallpaper shows between the icons.
 
+    /// Wallpaper apps place their children relative to the origin of the virtual desktop.
+    pub fn bounds() -> RECT {
+        unsafe {
+            let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+            RECT {
+                left, top,
+                right: left + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                bottom: top + GetSystemMetrics(SM_CYVIRTUALSCREEN),
+            }
+        }
+    }
+
+    pub unsafe fn layout_icons(desktop: HWND) {
+        // Keep saved icon positions relative to the primary monitor's list.
+        let top = desk_top();
+        let mut pos = POINT { x: 0, y: top };
+        ScreenToClient(desktop, &mut pos);
+        let width = GetSystemMetrics(SM_CXSCREEN);
+        let height = (GetSystemMetrics(SM_CYSCREEN) - top - desk_bottom()).max(0);
+        MoveWindow(ST.with_borrow(|st| st.list), pos.x, pos.y, width, height, 1);
+    }
+
     pub unsafe fn spawn_workerw(h: HWND) {
         if WORKERW.get() != 0 && IsWindow(WORKERW.get() as HWND) != 0 { return; }
         let mut r: RECT = std::mem::zeroed();
@@ -1149,6 +1229,16 @@ mod desk {
         let ww = CreateWindowExW(0, w("WorkerW").as_ptr(), ptr::null(), WS_CHILD | WS_VISIBLE, 0, 0, r.right, r.bottom, h, 0 as _, GetModuleHandleW(ptr::null()), ptr::null());
         SetWindowPos(ww, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); // under the icon list
         WORKERW.set(ww as isize);
+    }
+
+    pub unsafe fn resize_workerw(desktop: HWND) {
+        let worker = WORKERW.get() as HWND;
+        if IsWindow(worker) != 0 {
+            let mut client: RECT = std::mem::zeroed();
+            GetClientRect(desktop, &mut client);
+            MoveWindow(worker, 0, 0, client.right, client.bottom, 1);
+            InvalidateRect(worker, ptr::null(), 1);
+        }
     }
 
     /// Every couple of seconds: a wallpaper window inside WorkerW = live mode on, none = back to the picture.
@@ -1270,8 +1360,7 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
                     put(list, LVM_SETEXTENDEDLISTVIEWSTYLE, ex as usize, ex as isize);
                     for msg in [LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR] { put(list, msg, 0, CLR_NONE); }
                     put(list, LVM_SETTEXTCOLOR, 0, 0x00FF_FFFF);
-                    let (cw, ch) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-                    WALL.set((wall::load(cw, ch), cw, ch));
+                    wall::refresh(desk::bounds());
                     // grey (not ClearType) smoothing: on a live wallpaper the labels sit on a colour key, where ClearType leaves coloured fringes
                     put(list, WM_SETFONT, windows_sys::Win32::Graphics::Gdi::CreateFontW(-ui::sc(13), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 4, 0, w(ui::ui_face()).as_ptr()) as usize, 1);
                     // like explorer's desktop: wallpaper apps look for a SHELLDLL_DefView under Progman
@@ -1308,25 +1397,27 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
                 }
                 0
             }
-            // the bar came, went or changed size (it sets the work area), or the screen changed: the icon list follows
-            WM_SETTINGCHANGE | WM_DISPLAYCHANGE if desk() => {
-                if m == WM_DISPLAYCHANGE {
-                    SetWindowPos(h, HWND_BOTTOM, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), SWP_NOACTIVATE); // WM_SIZE lays out
-                } else if wp == SPI_SETWORKAREA as usize {
-                    let (list, mut r) = (ST.with_borrow(|st| st.list), std::mem::zeroed::<RECT>());
-                    GetClientRect(h, &mut r);
-                    MoveWindow(list, 0, desk_top(), r.right, (r.bottom - desk_top() - desk_bottom()).max(0), 1);
-                }
+            WM_DISPLAYCHANGE if desk() => {
+                let b = desk::bounds();
+                wall::refresh(b);
+                SetWindowPos(h, HWND_BOTTOM, b.left, b.top, b.right - b.left, b.bottom - b.top, SWP_NOACTIVATE);
+                desk::resize_workerw(h);
+                // The origin can move even if the size stays the same.
+                desk::layout_icons(h);
+                InvalidateRect(h, ptr::null(), 1);
+                0
+            }
+            WM_SETTINGCHANGE if desk() && wp == SPI_SETWORKAREA as usize => {
+                desk::layout_icons(h);
                 0
             }
             // mouse buttons 4 / 5 (and keyboard media keys) arrive as APPCOMMAND_BROWSER_BACKWARD / _FORWARD
             0x0319 if !desk() && matches!((lp >> 16) & 0x7FF, 1 | 2) => { nav(h, (lp >> 16) & 0x7FF == 1); 1 }
             WM_SIZE => {
-                let list = ST.with_borrow(|st| st.list);
-                let (cw, ch) = ((lp & 0xFFFF) as i32, ((lp >> 16) & 0xFFFF) as i32);
                 if desk() {
-                    MoveWindow(list, 0, desk_top(), cw, (ch - desk_top() - desk_bottom()).max(0), 1);
+                    desk::layout_icons(h);
                 } else {
+                    let (cw, ch) = ((lp & 0xFFFF) as i32, ((lp >> 16) & 0xFFFF) as i32);
                     ui::layout_children(cw, ch);
                     InvalidateRect(h, ptr::null(), 0);
                 }
@@ -1563,14 +1654,15 @@ fn main() {
         RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(proc), hInstance: inst, lpszClassName: cls.as_ptr(), hCursor: LoadCursorW(0 as _, IDC_ARROW), hIcon: LoadIconW(inst, 1 as _), hbrBackground: bg, ..std::mem::zeroed() });
         if desktop {
             DESKTOP.store(true, Relaxed);
-            // the whole screen: it paints the wallpaper too; the icon list sits above the bar (desk_top / desk_bottom)
+            // The desktop and wallpaper host span all monitors. The icon list stays on the primary screen.
             // class "Progman" like explorer's desktop, so Wallpaper Engine & co. find it; title "rs-desktop" tells it apart
             // from explorer's ("Program Manager") for rs-shell
             let pm = w("Progman");
             RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(proc), hInstance: inst, lpszClassName: pm.as_ptr(), hCursor: LoadCursorW(0 as _, IDC_ARROW), hIcon: LoadIconW(inst, 1 as _), hbrBackground: bg, ..std::mem::zeroed() });
             RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(desk::workerw_proc), hInstance: inst, lpszClassName: w("WorkerW").as_ptr(), ..std::mem::zeroed() });
             RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(DefWindowProcW), hInstance: inst, lpszClassName: w("SHELLDLL_DefView").as_ptr(), ..std::mem::zeroed() });
-            let d = CreateWindowExW(WS_EX_TOOLWINDOW, pm.as_ptr(), w("rs-desktop").as_ptr(), WS_POPUP, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), 0 as _, 0 as _, inst, ptr::null());
+            let b = desk::bounds();
+            let d = CreateWindowExW(WS_EX_TOOLWINDOW, pm.as_ptr(), w("rs-desktop").as_ptr(), WS_POPUP, b.left, b.top, b.right - b.left, b.bottom - b.top, 0 as _, 0 as _, inst, ptr::null());
             SetWindowPos(d, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         } else {
             CreateWindowExW(0, cls.as_ptr(), ptr::null(), WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, ui::sc(1000), ui::sc(660), 0 as _, 0 as _, inst, ptr::null());
