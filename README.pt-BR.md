@@ -24,7 +24,7 @@ Para atualizar, execute o instalador mais recente e selecione os componentes des
 
 O idioma padrão é **Português (Brasil)**. Para selecionar outro idioma, abra **Engrenagem → Idioma do WinRust** na barra de tarefas ou use o botão de idioma do instalador. Reabra as outras janelas do WinRust para aplicar a preferência.
 
-Na engrenagem, **Aparência** dá acesso aos temas, às cores e aos modelos salvos. Em **Posição, tamanho e comportamento**, você pode ajustar a barra em todos os monitores e limitar o Alt+Tab ao monitor atual. O **Win+R** abre o modo Executar quando o Explorador do Windows está desativado.
+Na engrenagem, **Tema**, **Cores e transparência** e **Modelos** ficam na seção **Aparência**. Em **Posição, tamanho e comportamento**, você pode ajustar a barra em todos os monitores e limitar o Alt+Tab ao monitor atual. O **Win+R** abre o modo Executar quando o Explorador do Windows está desativado.
 
 ## Remoção
 
@@ -51,7 +51,7 @@ Ao desinstalar o `rust-explorer`, o WinRust recupera os tipos de inicialização
 
 ## Estilos
 
-Na engrenagem da barra, abra **Aparência** para escolher o estilo. A escolha se aplica ao Explorador e à busca.
+Na engrenagem da barra, abra **Tema** para escolher o estilo. A escolha se aplica ao Explorador e à busca.
 
 | Estilo | Aparência |
 |---|---|
