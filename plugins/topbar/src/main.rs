@@ -630,9 +630,9 @@ unsafe fn tip_text(h: i32) -> String {
 
 fn vol_tip() -> String {
     match VOL.get() {
-        (v, false) if v >= 0 => format!("Volume {v}%"),
+        (v, false) if v >= 0 => format!("{} {v}%", t!("Громкость", "Volume")),
         (_, true) => winrust_common::pt!("Muted").into(),
-        _ => "Volume".into(),
+        _ => t!("Громкость", "Volume").into(),
     }
 }
 
@@ -1861,14 +1861,14 @@ unsafe fn save_bitmap(bmp: HBITMAP) -> Option<String> {
 unsafe fn clip_notice(bar: HWND) {
     let name = clip::DONE.lock().ok().and_then(|mut d| d.take()).unwrap_or_default();
     KillTimer(bar, 2);
-    show_tip(tf!("Фрагмент сохранён: {name}\nи скопирован в буфер обмена", "Snip saved: {name}\nand copied to the clipboard", "Recorte salvo: {name}\n e copiado para a área de transferência"), GetSystemMetrics(SM_CXSCREEN) / 2);
+    show_tip(tf!("Фрагмент сохранён: {name}\nи скопирован в буфер обмена", "Snip saved: {name}\nand copied to the clipboard", "Recorte salvo: {name}\ne copiado para a área de transferência"), GetSystemMetrics(SM_CXSCREEN) / 2);
     SetTimer(bar, 6, 2500, None);
 }
 
 /// PrtSc pressed: take the screenshot, then say so above the bar for a moment.
 unsafe fn screenshot_notice(bar: HWND) {
     let msg = match screenshot() {
-        Some(n) => tf!("Скриншот сохранён: {n}\nи скопирован в буфер обмена", "Screenshot saved: {n}\nand copied to the clipboard", "Captura de tela salva: {n}\n e copiada para a área de transferência"),
+        Some(n) => tf!("Скриншот сохранён: {n}\nи скопирован в буфер обмена", "Screenshot saved: {n}\nand copied to the clipboard", "Captura de tela salva: {n}\ne copiada para a área de transferência"),
         None => t!("Не удалось сделать скриншот", "Could not take a screenshot").to_string(),
     };
     KillTimer(bar, 2);
@@ -2601,7 +2601,7 @@ unsafe fn open_launcher() -> bool {
     true
 }
 
-/// The gear's menu: the UI style (saved for the other WinRust programs) and putting the windows side by side.
+/// The gear menu controls the language, appearance and placement of the bar.
 unsafe fn style_menu() {
     let bar = BAR.load(Relaxed) as HWND;
     let names = [t!("Обычный", "Normal"), t!("Терминал", "Terminal"), t!("Плавающий док", "Floating dock"), t!("Тайлинг", "Tiling"), t!("Белая дорога", "White road"), t!("Рубин", "Ruby"), t!("Современный", "Modern")];
@@ -2615,28 +2615,41 @@ unsafe fn style_menu() {
         items.push(it);
     }
     items.push(fly::MItem::new(t!("Кнопки слева (как в Windows 10)", "Buttons on the left (like Windows 10)")).on(i18n::style::align_left()).sep());
-    let head = (null_mut(), "\u{E713}", t!("Стиль", "Style").to_string(), t!("Вид панели и программ WinRust", "Look of the bar and the WinRust programs").to_string());
+    if let Some(first_style) = items.first_mut() {
+        first_style.sep = true;
+    }
+    items.insert(0, fly::MItem::new(t!("Язык WinRust", "WinRust language")).hint(i18n::locale::language().short_label()));
+    let head = (null_mut(), "\u{E713}", t!("Настройки панели задач", "Taskbar settings").to_string(), String::new());
     let tile = i18n::style::ALL.len();
-    fly::menu(tip_cx(&bar_layout(bar), GEAR), Some(head), items, move |i| match i18n::style::ALL.get(i) {
-        Some(&s) => {
-            i18n::style::set_style(s);
-            place(bar);
-        }
-        None if i == tile => tile_windows(),
-        None if i == tile + 5 => {
-            i18n::style::set_align_left(!i18n::style::align_left());
-            place(bar);
-            bar_anim(bar);
-        }
-        None if i > tile + 1 => {
-            i18n::style::set_side([i18n::style::Side::Bottom, i18n::style::Side::Left, i18n::style::Side::Right][i - tile - 2]);
-            place(bar);
-            bar_anim(bar);
-        }
-        None => {
-            i18n::style::set_autohide(!i18n::style::autohide());
-            place(bar); // the reserved strip comes or goes with it
-            bar_anim(bar);
+    let x = tip_cx(&bar_layout(bar), GEAR);
+    fly::menu(x, Some(head), items, move |index| {
+        let Some(i) = index.checked_sub(1) else {
+            fly::language_menu(x);
+            return;
+        };
+        match i18n::style::ALL.get(i) {
+            Some(&s) => {
+                i18n::style::set_style(s);
+                place(bar);
+            }
+            None if i == tile => tile_windows(),
+            None if i == tile + 1 => {
+                i18n::style::set_autohide(!i18n::style::autohide());
+                place(bar);
+                bar_anim(bar);
+            }
+            None if i == tile + 5 => {
+                i18n::style::set_align_left(!i18n::style::align_left());
+                place(bar);
+                bar_anim(bar);
+            }
+            None => {
+                if let Some(&(side, _)) = sides.get(i - tile - 2) {
+                    i18n::style::set_side(side);
+                    place(bar);
+                    bar_anim(bar);
+                }
+            }
         }
     });
 }

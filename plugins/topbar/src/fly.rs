@@ -68,11 +68,11 @@ fn auth_name(a: i32) -> &'static str {
         1 => winrust_common::pt!("Open"),
         2 => "WEP",
         3 => "WPA",
-        4 => "WPA‑Personal",
+        4 => winrust_common::pt!("WPA‑Personal"),
         6 => "WPA2",
-        7 => "WPA2‑Personal",
+        7 => winrust_common::pt!("WPA2‑Personal"),
         8 => "WPA3",
-        9 => "WPA3‑Personal",
+        9 => winrust_common::pt!("WPA3‑Personal"),
         _ => winrust_common::pt!("Secured"),
     }
 }
@@ -536,7 +536,7 @@ unsafe fn forget(ssid: &str) {
     let w = wide(&p);
     let mut ok = false;
     for_each_wlan(|h, g| ok |= WlanDeleteProfile(h, g, w.as_ptr(), null()) == 0);
-    NOTE.set(if ok { tf!("Сеть «{ssid}» забыта", "Forgot “{ssid}”", "Esqueci “{ssid}”") } else { tf!("Не удалось забыть «{ssid}»", "Could not forget “{ssid}”", "Não poderia esquecer “{ssid}”") });
+    NOTE.set(if ok { tf!("Сеть «{ssid}» забыта", "Forgot “{ssid}”", "A rede “{ssid}” foi esquecida") } else { tf!("Не удалось забыть «{ssid}»", "Could not forget “{ssid}”", "Não foi possível esquecer a rede “{ssid}”") });
     read_nets();
 }
 
@@ -781,6 +781,25 @@ fn menu_rows() -> (Vec<(i32, i32)>, i32) {
     (rows, y + 6)
 }
 
+pub(super) fn language_menu(x: i32) {
+    use winrust_common::locale::{Language, language, set_language};
+
+    let current = language();
+    let items = Language::ALL.iter().map(|&entry| MItem::new(entry.label()).on(entry == current)).collect();
+    menu(x, None, items, |choice| {
+        let Some(&selected) = Language::ALL.get(choice) else { return };
+        let bar = BAR.load(Relaxed) as HWND;
+        unsafe {
+            if let Err(e) = set_language(selected) {
+                let message = tf!("Не удалось сохранить язык: {e}", "Could not save the language: {e}", "Não foi possível salvar o idioma: {e}");
+                MessageBoxW(bar, wide(&message).as_ptr(), wide("WinRust").as_ptr(), MB_ICONERROR);
+            } else {
+                InvalidateRect(bar, null(), 0);
+            }
+        }
+    });
+}
+
 /// Right-click menu of an empty spot of the bar.
 pub fn context_menu(x: i32) {
     let pu = crate::purge_installed();
@@ -804,18 +823,7 @@ pub fn context_menu(x: i32) {
             2 => open(&wide(&format!(r"{}\System32\taskmgr.exe", std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())))),
             3 => open_cleaner(),
             99 => crate::open_purge(),
-            4 => {
-                let current = winrust_common::locale::language();
-                let languages = winrust_common::locale::Language::ALL;
-                let items = languages.iter().map(|language| MItem::new(language.label()).on(*language == current)).collect();
-                menu(x, None, items, move |choice| {
-                    let Some(language) = languages.get(choice) else { return };
-                    if let Err(e) = winrust_common::locale::set_language(*language) {
-                        let message = tf!("Не удалось сохранить язык: {e}", "Could not save the language: {e}", "Não foi possível salvar o idioma: {e}");
-                        MessageBoxW(BAR.load(Relaxed) as HWND, wide(&message).as_ptr(), wide("WinRust").as_ptr(), MB_ICONERROR);
-                    }
-                });
-            }
+            4 => language_menu(x),
             _ => _ = PostMessageW(FindWindowW(wide("topbar").as_ptr(), null()), WM_CLOSE, 0, 0), // quits the bar, brings the Windows taskbar back
         }
     });
@@ -1542,9 +1550,11 @@ unsafe fn paint(hw: HWND, k: Kind) {
                         text(dc, glyph, tile, pal().accent, DT_CENTER);
                     }
                     SelectObject(dc, f_title);
-                    text(dc, title, r(60, 10, w - 14, 32), pal().text, DT_LEFT);
-                    SelectObject(dc, f_small);
-                    text(dc, sub, r(60, 30, w - 14, 48), pal().dim, DT_LEFT);
+                    text(dc, title, r(60, 10, w - 14, if sub.is_empty() { 48 } else { 32 }), pal().text, DT_LEFT);
+                    if !sub.is_empty() {
+                        SelectObject(dc, f_small);
+                        text(dc, sub, r(60, 30, w - 14, 48), pal().dim, DT_LEFT);
+                    }
                     fill(dc, r(12, MHEAD_H + 4, w - 12, MHEAD_H + 5), pal().line, 0);
                 }
             });

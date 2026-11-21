@@ -1,5 +1,6 @@
 //! Battery, power plan and drive space: documented Win32 calls (GetSystemPowerStatus, powrprof, GetDiskFreeSpaceExW).
 use std::ptr::{null, null_mut};
+use winrust_common::locale::{Language, portuguese};
 use windows_sys::{
     Win32::{Foundation::*, Storage::FileSystem::*, System::Power::*},
     core::GUID,
@@ -73,6 +74,18 @@ fn active() -> Option<GUID> {
     Some(g)
 }
 
+fn plan_name(name: String, language: Language) -> String {
+    if language != Language::Portuguese {
+        return name;
+    }
+    let (base, suffix) = name.find(" (").map_or((name.as_str(), ""), |i| name.split_at(i));
+    let labels = ["Balanced", "Power saver", "High performance", "Ultimate Performance"];
+    match labels.into_iter().find(|label| base.eq_ignore_ascii_case(label)) {
+        Some(label) => format!("{}{suffix}", portuguese(label)),
+        None => name,
+    }
+}
+
 fn name_of(g: &GUID) -> String {
     let mut n = 0u32;
     unsafe { PowerReadFriendlyName(null_mut(), g, null(), null(), null_mut(), &mut n) };
@@ -84,7 +97,7 @@ fn name_of(g: &GUID) -> String {
         return "?".into();
     }
     let w: Vec<u16> = buf.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
-    String::from_utf16_lossy(&w)
+    plan_name(String::from_utf16_lossy(&w), lang!())
 }
 
 pub fn plan_text() -> String {
@@ -138,7 +151,7 @@ fn secs_text(s: u32) -> String {
     match s {
         0 => t!("Никогда", "Never").into(),
         s if s < 3600 => tf!("{} мин", "{} min", "{} min", s / 60),
-        s => tf!("{} ч", "{} h", "{}h", s / 3600),
+        s => tf!("{} ч", "{} h", "{} h", s / 3600),
     }
 }
 
@@ -182,5 +195,16 @@ mod tests {
         assert_eq!(secs_text(300), "5 мин");
         assert_eq!(secs_text(3600), "1 ч");
         assert_eq!(STEPS.len(), 10);
+    }
+
+    #[test]
+    fn localizes_standard_power_plan_labels() {
+        assert_eq!(
+            plan_name("Ultimate Performance (ExitLag)".into(), Language::Portuguese),
+            "Desempenho máximo (ExitLag)"
+        );
+        assert_eq!(plan_name("Balanced".into(), Language::Portuguese), "Equilibrado");
+        assert_eq!(plan_name("Studio mode".into(), Language::Portuguese), "Studio mode");
+        assert_eq!(plan_name("Balanced".into(), Language::English), "Balanced");
     }
 }

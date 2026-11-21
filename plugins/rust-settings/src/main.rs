@@ -1135,7 +1135,7 @@ unsafe fn paint(hwnd: HWND) {
             let rad = rd(14) * 2;
             if a.pending > 0 {
                 shape(mem, r, t.accent, rad);
-                let msg = tf!("Оставить этот режим? Enter: оставить, Esc или {} с: вернуть", "Keep this mode? Enter keeps it, Esc or {} s goes back", "Manter este modo? Enter mantém, Esc ou {} volta", a.pending);
+                let msg = tf!("Оставить этот режим? Enter: оставить, Esc или {} с: вернуть", "Keep this mode? Enter keeps it, Esc or {} s goes back", "Manter este modo? Enter confirma. Esc ou {} s revertem a alteração.", a.pending);
                 text(mem, body, &msg, RECT { left: r.left + p(18), right: r.right - p(18), ..r }, rgb(255, 255, 255), DT_LEFT);
             } else if let Some(pr) = &a.prompt {
                 shape(mem, r, t.sep, rad);

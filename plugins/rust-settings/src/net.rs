@@ -30,7 +30,7 @@ pub fn speed_text(bits_per_sec: u64) -> Option<String> {
     match bits_per_sec / 1_000_000 {
         0 => None,
         m if m >= 1000 => Some(tf!("{} Гбит/с", "{} Gbps", "{} Gbps", m as f64 / 1000.0)),
-        m => Some(tf!("{} Мбит/с", "{} Mbps", "{}Mbps", m)),
+        m => Some(tf!("{} Мбит/с", "{} Mbps", "{} Mbps", m)),
     }
 }
 
