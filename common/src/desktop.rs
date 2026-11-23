@@ -13,6 +13,9 @@ use windows_sys::{
 
 static HIDDEN: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
+// Stored on the Explorer window so the crash-recovery process can find it.
+pub const MASKED_TASKBAR: windows_sys::core::PCWSTR = windows_sys::w!("WinRust.MaskedTaskbar");
+
 /// Activates a window after a user action handled by the shell or a keyboard hook.
 pub fn activate_window(window: HWND) {
     unsafe {

@@ -23,6 +23,7 @@ mod bars;
 mod clip;
 mod fly;
 mod keyboard;
+mod native_tray;
 mod quick;
 mod shell_mode;
 mod switcher;
@@ -824,10 +825,9 @@ unsafe fn set_state(hwnd: HWND, state: usize) {
 
 /// Hides the real taskbar and sets it to auto-hide so Windows gives its work-area strip back.
 unsafe fn hide_taskbar() {
-    set_state(tray()[0], ABS_AUTOHIDE as usize);
-    for t in tray().into_iter().filter(|t| !t.is_null()) {
-        ShowWindow(t, SW_HIDE);
-    }
+    let primary = find_other("Shell_TrayWnd");
+    if !primary.is_null() { set_state(primary, ABS_AUTOHIDE as usize); }
+    hide_taskbar_if_shown();
 }
 
 fn taskbar_state_file() -> PathBuf {
@@ -863,17 +863,19 @@ unsafe fn remember_taskbar_state() -> usize {
 }
 
 unsafe fn show_taskbar(state: usize) {
-    set_state(tray()[0], state);
-    for t in tray().into_iter().filter(|t| !t.is_null()) {
+    let taskbars = tray();
+    if !taskbars[0].is_null() { set_state(taskbars[0], state); }
+    for t in taskbars.into_iter().filter(|t| !t.is_null()) {
+        native_tray::restore(t);
         ShowWindow(t, SW_SHOWNA);
     }
 }
 
-// explorer re-shows its taskbar on hover / restart; hide it again
+// Explorer can re-show an individual window. Reapplying the global appbar state
+// and layout here makes Explorer update all of its taskbars again.
 unsafe fn hide_taskbar_if_shown() {
-    if tray().into_iter().any(|t| !t.is_null() && IsWindowVisible(t) != 0) {
-        hide_taskbar();
-        bars::place_all();
+    for t in tray().into_iter().filter(|t| !t.is_null()) {
+        if !native_tray::mask(t) && IsWindowVisible(t) != 0 { ShowWindow(t, SW_HIDE); }
     }
 }
 
@@ -1698,6 +1700,7 @@ unsafe fn run_box() {
 
 /// Win key on its own opens our Start. Runs on its own thread so a busy bar can never stall the system keyboard.
 unsafe extern "system" fn kb_hook(n: i32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if BAR.load(Relaxed) == 0 { return CallNextHookEx(null_mut(), n, w, l); }
     if n >= 0 {
         let k = &*(l as *const KBDLLHOOKSTRUCT);
         let down0 = w == WM_KEYDOWN as usize || w == WM_SYSKEYDOWN as usize;
@@ -3297,15 +3300,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             HV.with_borrow_mut(|hover| hover.retain(|&(bar, _), _| bar != hwnd as usize));
         }
         WM_DESTROY => {
+            KillTimer(hwnd, 1); // stop hiding native taskbars before handing the desktop back
             let mut ab: APPBARDATA = zeroed();
             ab.cbSize = size_of::<APPBARDATA>() as u32;
             ab.hWnd = hwnd;
             SHAppBarMessage(ABM_REMOVE, &mut ab);
             bars::destroy_secondary();
+            BAR.store(0, Relaxed);
+            DestroyWindow(HOST.replace(null_mut()));
             if find_other("Shell_TrayWnd").is_null() { bars::release_work_areas(); }
             show_taskbar(OLD_STATE.get());
             forget_taskbar_state();
-            DestroyWindow(HOST.replace(null_mut()));
             announce(); // icons go back to explorer's tray
             PostQuitMessage(0);
         }
@@ -3378,6 +3383,7 @@ fn main() {
         let wc = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: hi, hCursor: LoadCursorW(null_mut(), IDC_ARROW), lpszClassName: class.as_ptr(), ..zeroed() };
         RegisterClassW(&wc);
         let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED, class.as_ptr(), class.as_ptr(), WS_POPUP, 0, 0, GetSystemMetrics(SM_CXSCREEN), bar_h(), null_mut(), null_mut(), hi, null());
+        OLD_STATE.set(remember_taskbar_state());
         // Our own Shell_TrayWnd (hidden, topmost, so apps find it before explorer's): apps register their tray icons here.
         let tc = wide("Shell_TrayWnd");
         RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(tray_proc), hInstance: hi, lpszClassName: tc.as_ptr(), ..zeroed() });
@@ -3400,7 +3406,6 @@ fn main() {
         let swc = wide("topbar_alttab");
         RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(sw_proc), hInstance: hi, hCursor: LoadCursorW(null_mut(), IDC_ARROW), lpszClassName: swc.as_ptr(), ..zeroed() });
         SWWND.set(CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, swc.as_ptr(), null(), WS_POPUP, 0, 0, 1, 1, null_mut(), null_mut(), hi, null()));
-        OLD_STATE.set(remember_taskbar_state());
         appbar_new(hwnd);
         // Without explorer nobody is the "taskman" window, so Windows treats minimized windows as loose icons and leaves
         // them as caption stubs on the desktop. Becoming that window (what explorer's taskbar does) makes them hide properly
@@ -3431,6 +3436,7 @@ fn main() {
             TranslateMessage(&m);
             DispatchMessageW(&m);
         }
+        shell_mode::settle_native_taskbars();
     }
 }
 

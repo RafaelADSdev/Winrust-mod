@@ -91,3 +91,20 @@ unsafe fn failed(hwnd: HWND) {
         error(hwnd, t!("Не удалось запустить панель задач Windows. Попробуйте ещё раз.", "The Windows taskbar did not start. Try again."));
     }
 }
+
+/// Explorer can finish a queued auto-hide animation after the appbar has closed.
+pub(super) unsafe fn settle_native_taskbars() {
+    if OLD_STATE.get() & ABS_AUTOHIDE as usize != 0 { return; }
+    for _ in 0..10 {
+        if !windows_mode::enabled() { return; }
+        thread::sleep(Duration::from_millis(250));
+        let windows = tray();
+        let primary = windows[0];
+        if primary.is_null() { return; }
+        let mut bar = APPBARDATA { cbSize: size_of::<APPBARDATA>() as u32, hWnd: primary, ..zeroed() };
+        if SHAppBarMessage(ABM_GETSTATE, &mut bar) & ABS_AUTOHIDE as usize != 0 { return; }
+        for t in windows.into_iter().filter(|&t| !t.is_null() && IsWindowVisible(t) == 0) {
+            ShowWindow(t, SW_SHOWNA);
+        }
+    }
+}

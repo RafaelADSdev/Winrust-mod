@@ -126,7 +126,7 @@ pub(super) unsafe fn release_work_areas() {
 /// and preserve reservations on the other edges.
 unsafe fn without_native_strip(screen: Display, mut area: RECT) -> RECT {
     for native in tray().into_iter().skip(1) {
-        if IsWindowVisible(native) != 0 || MonitorFromWindow(native, MONITOR_DEFAULTTONULL) != screen.monitor { continue; }
+        if !native_tray::hidden(native) || MonitorFromWindow(native, MONITOR_DEFAULTTONULL) != screen.monitor { continue; }
         let mut rect = zeroed();
         if GetWindowRect(native, &mut rect) == 0 { continue; }
         let m = screen.bounds;
