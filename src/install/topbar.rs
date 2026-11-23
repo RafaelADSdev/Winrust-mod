@@ -7,6 +7,11 @@ pub(crate) fn bar_dir() -> PathBuf {
 
 pub(crate) const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 
+fn resume_shortcuts() -> impl Iterator<Item = PathBuf> {
+    let desktop = env::var_os("PUBLIC").map(|dir| PathBuf::from(dir).join(r"Desktop\WinRust Mod.lnk"));
+    std::iter::once(start_lnk("WinRust Mod")).chain(desktop)
+}
+
 // topbar.cfg next to topbar.exe (the bar re-reads it every few seconds). Missing file = OneDrive hidden.
 pub(crate) fn cfg_path() -> PathBuf {
     bar_dir().join("topbar.cfg")
@@ -62,6 +67,9 @@ pub(crate) fn bar_install() -> Result<(), String> {
             run("reg", &["add", RUN_KEY, "/v", "reshell", "/t", "REG_SZ", "/d", &format!("\"{}\"", rsh.display()), "/f"])?; // fallback
         }
         let _ = Command::new("explorer.exe").arg(&rsh).spawn();
+        for lnk in resume_shortcuts() {
+            soft(t!("ярлык для возобновления WinRust не создан", "WinRust resume shortcut was not created"), shortcut(&lnk, &dst, "--resume-winrust"));
+        }
         run(dst.to_str().unwrap(), &["--restore"])?; // clean state in case a killed instance left the taskbar hidden
         // The bar runs elevated (a task with the highest run level starts it at logon without a UAC prompt): that lets it close
         // elevated windows and click elevated apps' tray icons. It starts everything else through explorer, i.e. unelevated.
@@ -88,6 +96,7 @@ pub(crate) fn bar_uninstall() -> Result<(), String> {
     let _ = run("taskkill", &["/f", "/im", "topbar.exe"]);
     let _ = profile_uninstall();
     let r = run(bar_dir().join("topbar.exe").to_str().unwrap(), &["--restore"]); // a killed bar cannot restore the taskbar itself
+    for lnk in resume_shortcuts() { let _ = fs::remove_file(lnk); }
     let _ = fs::remove_dir_all(bar_dir());
     cleaner_release(tm_dir().join("rtaskmgr-win32.exe").is_file());
     r

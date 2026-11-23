@@ -82,6 +82,9 @@ unsafe extern "system" fn hook(n: i32, w: WPARAM, l: LPARAM) -> LRESULT {
         if (w == WM_KEYUP as usize || w == WM_SYSKEYUP as usize) && HELD.load(Relaxed) == k.vkCode {
             HELD.store(0, Relaxed); // also when Win was let go first
         }
+        if win && winrust_common::windows_mode::enabled() {
+            return unsafe { CallNextHookEx(HOOK.load(Relaxed) as _, n, w, l) };
+        }
         if let (Some(act), true) = (win_action(k.vkCode), win && k.flags & LLKHF_INJECTED == 0) {
             // swallow it so Explorer's own handler (if it still answers) does not act as well
             if w == WM_KEYDOWN as usize && HELD.swap(k.vkCode, Relaxed) != k.vkCode {

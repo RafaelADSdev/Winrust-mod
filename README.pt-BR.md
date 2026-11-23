@@ -26,6 +26,8 @@ O idioma padrão é **Português (Brasil)**. Para selecionar outro idioma, abra 
 
 Na engrenagem, **Tema**, **Cores e transparência** e **Modelos** ficam na seção **Aparência**. Em **Posição, tamanho e comportamento**, você pode ajustar a barra em todos os monitores e limitar o Alt+Tab ao monitor atual. O **Win+R** abre o modo Executar quando o Explorador do Windows está desativado.
 
+Para usar temporariamente a barra, a área de trabalho e o Explorador do Windows, abra **Engrenagem → Voltar ao Windows**. Para reativar o WinRust, abra o atalho **WinRust Mod** na área de trabalho ou no menu Iniciar. A escolha vale para a sua conta e fica salva até você reativar o WinRust. Ao atualizar uma instalação com o **rust-explorer**, atualize também esse componente para que ele acompanhe a troca de modo.
+
 ## Remoção
 
 - **Remover tudo** no instalador restaura a Pesquisa do Windows, a barra de tarefas, o Explorador de Arquivos e as configurações de serviços salvas.

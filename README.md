@@ -22,6 +22,8 @@ If UAC asks for **another administrator's** password, the per-user settings (sta
 
 **Update:** download the new `WinRust.exe` from the releases page, run it as administrator and select the components you want to update or install. An existing `rust-explorer` stays selected by default for updates. Your settings and the saved original Windows values stay.
 
+To use the Windows taskbar, desktop and File Explorer for a while, choose **Gear → Switch to Windows mode**. Open the **WinRust Mod** shortcut on the desktop or in Start to resume. The mode is saved for your account until you switch back. Update both `topbar` and `rust-explorer` if you already use the Explorer replacement.
+
 Use the language button in the top-right corner of the installer, or **WinRust language** in the bar's right-click menu. English, Russian and Brazilian Portuguese are available. Reopen any existing WinRust windows after changing the language.
 
 ## Remove

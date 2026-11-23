@@ -17,7 +17,8 @@
 //   shortcuts: changing the wallpaper file needs a restart, icon labels are always white, no background menu /
 //   drag-to-position / auto-arrange, items from the public desktop can't be renamed.
 #![windows_subsystem = "windows"]
-use std::{cell::RefCell, env, fs, os::windows::fs::MetadataExt, path::{Path, PathBuf}, ptr, sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed}};
+use std::{cell::RefCell, env, fs, os::windows::{fs::MetadataExt, process::CommandExt}, path::{Path, PathBuf}, ptr, sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed}};
+use winrust_common::windows_mode;
 use windows_sys::Win32::{Foundation::*, Graphics::Gdi::{BLACK_BRUSH, GetStockObject, InvalidateRect}, System::LibraryLoader::GetModuleHandleW, UI::{Controls::*, Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL}, Shell::*, WindowsAndMessaging::*}};
 
 mod zipx; // our own ZIP engine (deflate, inflate, container)
@@ -450,6 +451,19 @@ fn start_target() -> (PathBuf, Option<String>) {
         (true, Some(d)) => (d.to_path_buf(), p.file_name().map(|n| n.to_string_lossy().into_owned())),
         _ => (p, None),
     }
+}
+
+fn open_in_windows() {
+    let mut explorer = std::process::Command::new(windows_mode::explorer());
+    if env::args_os().nth(1).is_some() {
+        let (folder, file) = start_target();
+        if let Some(file) = file {
+            explorer.raw_arg(format!("/select,\"{}\"", folder.join(file).display()));
+        } else if folder.is_dir() {
+            explorer.arg(folder);
+        }
+    }
+    let _ = explorer.spawn();
 }
 
 /// Another app asked the shell to show `p` in a folder window (SHOpenFolderAndSelectItems): open its folder here, select it, come to front.
@@ -1439,17 +1453,26 @@ mod desk {
         true
     }
 
-    unsafe fn adopt_wallpapers(desktop: HWND, source: HWND) {
+    unsafe fn wallpaper_children(source: HWND) -> Vec<HWND> {
+        if source.is_null() { return Vec::new(); }
+        let mut found = Vec::new();
         let mut child = GetWindow(source, GW_CHILD);
         while !child.is_null() {
-            let next = GetWindow(child, GW_HWNDNEXT); // moving a child changes its siblings
             let mut class = [0u16; 64];
             let n = GetClassNameW(child, class.as_mut_ptr(), class.len() as i32) as usize;
-            if String::from_utf16_lossy(&class[..n]).starts_with("WPE") && IsWindowVisible(child) != 0
-                && move_wallpaper(child, source, spawn_workerw(desktop)) {
+            if String::from_utf16_lossy(&class[..n]).starts_with("WPE") && IsWindowVisible(child) != 0 {
+                found.push(child);
+            }
+            child = GetWindow(child, GW_HWNDNEXT);
+        }
+        found
+    }
+
+    unsafe fn adopt_wallpapers(desktop: HWND, source: HWND) {
+        for child in wallpaper_children(source) {
+            if move_wallpaper(child, source, spawn_workerw(desktop)) {
                 WALLPAPER_PARENTS.with_borrow_mut(|parents| parents.push((child, source)));
             }
-            child = next;
         }
     }
 
@@ -1481,11 +1504,17 @@ mod desk {
                 move_wallpaper(window, worker, parent);
             }
         }
+        if windows_mode::enabled() && !shell.is_null() {
+            // Wallpaper Engine may have attached directly to WinRust while Explorer was absent.
+            let native_worker = FindWindowExW(shell, ptr::null_mut(), windows_sys::w!("WorkerW"), ptr::null());
+            let target = if native_worker.is_null() { shell } else { native_worker };
+            for window in wallpaper_children(worker) { move_wallpaper(window, worker, target); }
+        }
     }
 
     /// Return to the static picture when the wallpaper app closes or stops drawing.
     pub unsafe fn check_live(desktop: HWND, list: HWND) {
-        recover_wallpapers(desktop);
+        if !windows_mode::enabled() { recover_wallpapers(desktop); }
         let ww = WORKERW.get() as HWND;
         let live = !ww.is_null() && IsWindow(ww) != 0 && !GetWindow(ww, GW_CHILD).is_null();
         if live == LIVE.replace(live) { return; }
@@ -1940,6 +1969,11 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
 }
 
 fn main() {
+    let desktop = env::args_os().nth(1).is_some_and(|arg| arg == "--desktop");
+    if windows_mode::enabled() {
+        if !desktop { open_in_windows(); }
+        return;
+    }
     sh::init();
     unsafe {
         SetProcessDPIAware(); // sharp text at any scaling; every size below goes through ui::sc
@@ -1949,7 +1983,6 @@ fn main() {
         InitCommonControlsEx(&INITCOMMONCONTROLSEX { dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32, dwICC: ICC_LISTVIEW_CLASSES });
         let inst = GetModuleHandleW(ptr::null());
         let cls = w("RustExplorer");
-        let desktop = env::args().nth(1).as_deref() == Some("--desktop");
         // desktop without a wallpaper file shows black, not window white
         let bg = if desktop { GetStockObject(BLACK_BRUSH) as _ } else { windows_sys::Win32::Graphics::Gdi::CreateSolidBrush(ui::pal().bg) };
         RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(ui::proc), hInstance: inst, lpszClassName: w("RxChrome").as_ptr(), hCursor: LoadCursorW(0 as _, IDC_ARROW), ..std::mem::zeroed() });

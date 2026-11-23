@@ -24,6 +24,7 @@ mod clip;
 mod fly;
 mod keyboard;
 mod quick;
+mod shell_mode;
 mod switcher;
 use windows::{
     Win32::{
@@ -2727,6 +2728,7 @@ unsafe fn style_menu() {
     let anchor = tip_cx(&bar_layout(bars::active()), GEAR);
     let items = vec![
         fly::MItem::new(t!("Язык WinRust", "WinRust language")).hint(i18n::locale::language().short_label()),
+        fly::MItem::new(t!("Перейти в режим Windows", "Switch to Windows mode")),
         fly::MItem::head(t!("Внешний вид", "Look")).sep(),
         fly::MItem::new(t!("Тема", "Theme")).hint(style_name(style())).swatch(i18n::style::pal().accent),
         fly::MItem::new(t!("Цвета и прозрачность", "Colors and transparency")).hint("›"),
@@ -2738,12 +2740,13 @@ unsafe fn style_menu() {
     ];
     gear_page("\u{E713}", t!("Настройки панели задач", "Taskbar settings"), "", items, move |i| match i {
         0 => fly::language_menu(anchor),
-        2 => theme_page(),
-        3 => colors_page(),
-        4 => templates_page(),
-        6 => bar_page(),
-        7 => tile_windows(),
-        8 => reset_page(),
+        1 => { PostMessageW(BAR.load(Relaxed) as HWND, shell_mode::PAUSE, 0, 0); }
+        3 => theme_page(),
+        4 => colors_page(),
+        5 => templates_page(),
+        7 => bar_page(),
+        8 => tile_windows(),
+        9 => reset_page(),
         _ => {}
     });
 }
@@ -3202,12 +3205,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_TIMER if wp == 6 => hide_tip(hwnd), // the volume readout after a wheel turn
         WM_TIMER if wp == 3 => fs_update(hwnd),
         WM_TIMER if wp == keyboard::RETRY_TIMER => keyboard::retry(hwnd),
+        WM_TIMER if is_main && wp == shell_mode::RETRY_TIMER => shell_mode::check(hwnd),
         WM_TIMER if wp == 4 => {
             InvalidateRect(hwnd, null(), 0);
         }
         WM_TIMER if wp == 5 => bar_step(hwnd),
         WIN_START => fly::toggle(fly::Kind::Start),
         LANG_CYCLE => next_lang(hwnd, wp != 0),
+        shell_mode::PAUSE if is_main => shell_mode::pause(hwnd),
         ALT_TAB => alt_tab(wp == 1),
         WIN_NUM => win_num(wp),
         ALT_UP => alt_done(wp == 1),
@@ -3342,11 +3347,9 @@ fn main() {
             }
             return;
         }
-        // Atomic single-instance guard (FindWindow alone raced when two launchers started us at once); the handle lives until exit.
-        let m = windows_sys::Win32::System::Threading::CreateMutexW(null(), 0, wide("Local\\topbar-single").as_ptr());
-        if m.is_null() || GetLastError() == ERROR_ALREADY_EXISTS || !FindWindowW(wide("topbar").as_ptr(), null()).is_null() {
-            return; // already running
-        }
+        let resume = std::env::args().nth(1).as_deref() == Some("--resume-winrust");
+        if !resume && i18n::windows_mode::enabled() { return; }
+        if !shell_mode::claim_bar(resume) || (resume && !shell_mode::resume()) { return; }
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         // Without explorer nobody hides minimized windows: they sit as small caption stubs at the bottom left of the screen.
         // ARW_HIDE moves them off screen (this session only: fWinIni 0 does not touch the saved setting).

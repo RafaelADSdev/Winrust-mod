@@ -12,7 +12,8 @@
 // Run/Startup entries are started through `cmd /c start` (no RunOnce, no startup-delay rules, no disabled-list in
 // StartupApproved), topbar's "open" still shells out to explorer.exe for /select; upgrade when those matter.
 use std::{os::windows::process::CommandExt, path::PathBuf, process::Command, ptr, thread, time::{Duration, Instant}};
-use windows_sys::{core::BOOL, Win32::{Foundation::{HWND, LPARAM, RECT}, UI::{Input::KeyboardAndMouse::{MOD_NOREPEAT, MOD_WIN, RegisterHotKey}, WindowsAndMessaging::*}}};
+use windows_sys::{core::BOOL, Win32::{Foundation::{HWND, LPARAM, RECT}, UI::{Input::KeyboardAndMouse::{MOD_NOREPEAT, MOD_WIN, RegisterHotKey, UnregisterHotKey}, WindowsAndMessaging::*}}};
+use winrust_common::windows_mode;
 
 const WINLOGON: &str = r"HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon";
 const NO_WINDOW: u32 = 0x0800_0000;
@@ -121,6 +122,10 @@ fn find_exe(name: &str) -> PathBuf {
 
 fn bar_up() -> bool { unsafe { !FindWindowW(wide("topbar").as_ptr(), std::ptr::null()).is_null() } }
 
+fn desktop_up() -> bool {
+    unsafe { !FindWindowW(windows_sys::w!("Progman"), windows_sys::w!("rs-desktop")).is_null() }
+}
+
 /// A minimized window left on screen (or minimized before the hide setting was applied) shows as a caption stub on
 /// the desktop: park it where Windows itself parks hidden minimized windows.
 unsafe extern "system" fn park(h: HWND, _: LPARAM) -> BOOL {
@@ -184,6 +189,15 @@ fn log(msg: &str) {
 fn run_shell() {
     unsafe { windows_sys::Win32::System::Console::FreeConsole() };
     log("start");
+    if windows_mode::enabled() {
+        // The legacy Winlogon shell can be started instead of Explorer even in Windows mode.
+        let _ = quiet(windows_mode::explorer()).spawn();
+        let hotkeys = find_exe("reshell.exe");
+        if hotkeys.exists() { let _ = quiet(hotkeys).spawn(); }
+        thread::spawn(supervise);
+        hotkey_loop();
+        return;
+    }
     // without explorer a minimized window is drawn as a little caption stub on the desktop (apps started with
     // --minimized left grey rectangles over the icons): hide them, the bar lists the windows anyway
     let mut mm = MINIMIZEDMETRICS { cbSize: size_of::<MINIMIZEDMETRICS>() as u32, iWidth: 0, iHorzGap: 0, iVertGap: 0, iArrange: ARW_HIDE as i32 };
@@ -204,7 +218,6 @@ fn run_shell() {
     if hotkeys.exists() { log(&format!("reshell spawn -> {:?}", quiet(&hotkeys).spawn().map(|_| ()))); }
     let desktop = dir().join("rust-explorer.exe");
     // the rust-explorer desktop: class "Progman" (so Wallpaper Engine finds it), title "rs-desktop" (explorer's is "Program Manager")
-    let desktop_up = || unsafe { !FindWindowW(wide("Progman").as_ptr(), wide("rs-desktop").as_ptr()).is_null() };
     log(&format!("desktop exe {} exists={} up={}", desktop.display(), desktop.exists(), desktop_up()));
     if desktop.exists() && !desktop_up() { log(&format!("desktop spawn -> {:?}", quiet(&desktop).arg("--desktop").spawn().map(|_| ()))); }
     // the supervisor runs on its own thread; this one owns the hotkeys (RegisterHotKey needs the thread's message loop)
@@ -215,11 +228,29 @@ fn run_shell() {
 /// Win+D (show desktop) and Win+E (file manager) for sessions where Explorer is not the shell. Never returns.
 fn hotkey_loop() {
     unsafe {
-        RegisterHotKey(ptr::null_mut(), 1, MOD_WIN | MOD_NOREPEAT, 'D' as u32);
-        RegisterHotKey(ptr::null_mut(), 2, MOD_WIN | MOD_NOREPEAT, 'E' as u32);
+        let set_active = |on| {
+            for (id, key) in [(1, 'D'), (2, 'E')] {
+                if on {
+                    RegisterHotKey(ptr::null_mut(), id, MOD_WIN | MOD_NOREPEAT, key as u32);
+                } else {
+                    UnregisterHotKey(ptr::null_mut(), id);
+                }
+            }
+        };
+        let mut active = !windows_mode::enabled();
+        set_active(active);
+        let timer = SetTimer(ptr::null_mut(), 0, 200, None);
         let mut m: MSG = std::mem::zeroed();
         while GetMessageW(&mut m, ptr::null_mut(), 0, 0) > 0 {
-            match (m.message == WM_HOTKEY).then_some(m.wParam) {
+            if m.message == WM_TIMER && m.wParam == timer {
+                let on = !windows_mode::enabled();
+                if active != on {
+                    set_active(on);
+                    active = on;
+                }
+                continue;
+            }
+            match (active && m.message == WM_HOTKEY && !windows_mode::enabled()).then_some(m.wParam) {
                 Some(1) => winrust_common::desktop::toggle(),
                 Some(2) => { let fm = dir().join("rust-explorer.exe"); let _ = quiet(if fm.exists() { fm } else { "explorer.exe".into() }).spawn(); }
                 _ => {}
@@ -231,7 +262,19 @@ fn hotkey_loop() {
 /// Keeps topbar alive; if it will not stay up, hands the session to explorer.exe and ends the shell.
 fn supervise() {
     let (mut starts, mut since, mut misses) = (0, Instant::now(), 0);
+    let mut paused = windows_mode::enabled();
     loop {
+        if windows_mode::enabled() {
+            paused = true;
+            misses = 0;
+            thread::sleep(Duration::from_secs(1));
+            continue;
+        }
+        if std::mem::take(&mut paused) {
+            set_wallpaper();
+            let desktop = dir().join("rust-explorer.exe");
+            if desktop.exists() && !desktop_up() { let _ = quiet(desktop).arg("--desktop").spawn(); }
+        }
         unsafe { EnumWindows(Some(park), 0) };
         if bar_up() { misses = 0; } else { misses += 1; }
         if misses >= 6 { // ~6 s: the loop ticks every second now
@@ -320,46 +363,56 @@ fn overlay() {
     unsafe { windows_sys::Win32::System::Console::FreeConsole() };
     let replace = replace_on();
     log(&format!("overlay start (replace explorer: {replace})"));
-    let wp = thread::spawn(set_wallpaper); // makes sure the BMP the desktop window paints exists (and refreshes the wallpaper)
-    if !bar_up() { log(&format!("topbar spawn -> {:?}", quiet(find_exe("topbar.exe")).spawn().map(|_| ()))); }
+    let wp = (!windows_mode::enabled()).then(|| thread::spawn(set_wallpaper)); // prepare the BMP before opening the desktop
+    if !windows_mode::enabled() && !bar_up() {
+        log(&format!("topbar spawn -> {:?}", quiet(find_exe("topbar.exe")).spawn().map(|_| ())));
+    }
     // Win+I / Win+E / Win+D live in reshell: its Run entry may be missing (another account's HKCU), and without it Explorer's own Win+I
     // fails once the shell is gone. A second copy exits at once (one hook per session).
     let hk = find_exe("reshell.exe");
     if hk.exists() { log(&format!("reshell spawn -> {:?}", quiet(&hk).spawn().map(|_| ()))); }
-    let _ = wp.join(); // the BMP conversion (only on a fresh install or a new wallpaper) finishes before the desktop paints it
+    if let Some(wp) = wp { let _ = wp.join(); }
     let desktop = dir().join("rust-explorer.exe");
-    let up = || unsafe { !FindWindowW(wide("Progman").as_ptr(), wide("rs-desktop").as_ptr()).is_null() };
-    if desktop.exists() && !up() { log(&format!("desktop spawn -> {:?}", quiet(&desktop).arg("--desktop").spawn().map(|_| ()))); }
+    if !windows_mode::enabled() && desktop.exists() && !desktop_up() {
+        log(&format!("desktop spawn -> {:?}", quiet(&desktop).arg("--desktop").spawn().map(|_| ())));
+    }
     if replace {
         // Explorer is being replaced: this thread watches, the main one owns Win+D / Win+E
-        thread::spawn(move || overlay_watch(replace, desktop, up));
+        thread::spawn(move || overlay_watch(replace, desktop));
         hotkey_loop();
     } else {
-        overlay_watch(replace, desktop, up);
+        overlay_watch(replace, desktop);
     }
 }
 
 /// Keeps topbar and the desktop alive. With `replace` it also ends the shell Explorer once both are up, and gives it back
 /// (so the user is never left without a shell) if the bar will not stay up.
-fn overlay_watch(replace: bool, desktop: PathBuf, up: impl Fn() -> bool) {
+fn overlay_watch(replace: bool, desktop: PathBuf) {
     let (mut starts, mut misses, mut dmiss, mut stable, mut killed) = (0, 0, 0, 0, false);
+    let mut paused = windows_mode::enabled();
     let began = Instant::now();
     // newer builds write no markers: watch for the autostart programs themselves instead of always waiting the full grace
     let (expected, untracked) = if replace { expected_autostart(&autostart()) } else { (vec![], 0) };
     if replace { log(&format!("autostart to wait for: {} exe(s) {:?}, {} other entr(ies)", expected.len(), expected, untracked)); }
     loop {
         thread::sleep(Duration::from_secs(3));
+        if windows_mode::enabled() {
+            paused = true;
+            (starts, misses, dmiss, stable, killed) = (0, 0, 0, 0, false);
+            continue;
+        }
+        if std::mem::take(&mut paused) { set_wallpaper(); }
         if replace && !killed {
             // both our surfaces must be on screen before the system's one goes away
-            stable = if bar_up() && up() { stable + 1 } else { 0 };
+            stable = if bar_up() && desktop_up() { stable + 1 } else { 0 };
             let missing = missing_autostart(&expected, &winrust_common::proc::list());
-            if stable >= 3 && may_end_explorer(startup_run(), began.elapsed(), missing.is_empty(), untracked) {
+            if stable >= 3 && may_end_explorer(startup_run(), began.elapsed(), missing.is_empty(), untracked) && !windows_mode::enabled() {
                 log(&format!("autostart done (markers: {}, after {} s, not running: {:?})", startup_run(), began.elapsed().as_secs(), missing));
                 kill_shell_explorer();
                 killed = true;
             }
         }
-        dmiss = if desktop.exists() && !up() { dmiss + 1 } else { 0 };
+        dmiss = if desktop.exists() && !desktop_up() { dmiss + 1 } else { 0 };
         if dmiss >= 2 { log(&format!("desktop respawn -> {:?}", quiet(&desktop).arg("--desktop").spawn().map(|_| ()))); dmiss = 0; }
         if bar_up() { misses = 0; continue; }
         misses += 1;
